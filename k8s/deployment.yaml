@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phlower
+  labels:
+    app: phlower
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phlower
+  template:
+    metadata:
+      labels:
+        app: phlower
+    spec:
+      containers:
+        - name: phlower
+          image: phlower:latest
+          ports:
+            - containerPort: 8100
+          env:
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: phlower-secrets
+                  key: CELERY_BROKER_URL
+            - name: RETENTION_HOURS
+              value: "24"
+            - name: MAX_GLOBAL_INVOCATIONS
+              value: "500000"
+            - name: MAX_INVOCATIONS_PER_TASK
+              value: "50000"
+            - name: SUCCESS_SAMPLE_RATE
+              value: "0.1"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8100
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8100
+            initialDelaySeconds: 3
+            periodSeconds: 10

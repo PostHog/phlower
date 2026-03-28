@@ -1,0 +1,73 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      chart.js:
+        specifier: 4.4.7
+        version: 4.4.7
+      chartjs-adapter-date-fns:
+        specifier: 3.0.0
+        version: 3.0.0(chart.js@4.4.7)(date-fns@4.1.0)
+      htmx-ext-sse:
+        specifier: 2.2.2
+        version: 2.2.2
+      htmx.org:
+        specifier: 2.0.4
+        version: 2.0.4
+      idiomorph:
+        specifier: 0.3.0
+        version: 0.3.0
+
+packages:
+
+  '@kurkle/color@0.3.4':
+    resolution: {integrity: sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w==}
+
+  chart.js@4.4.7:
+    resolution: {integrity: sha512-pwkcKfdzTMAU/+jNosKhNL2bHtJc/sSmYgVbuGTEDhzkrhmyihmP7vUc/5ZK9WopidMDHNe3Wm7jOd/WhuHWuw==}
+    engines: {pnpm: '>=8'}
+
+  chartjs-adapter-date-fns@3.0.0:
+    resolution: {integrity: sha512-Rs3iEB3Q5pJ973J93OBTpnP7qoGwvq3nUnoMdtxO+9aoJof7UFcRbWcIDteXuYd1fgAvct/32T9qaLyLuZVwCg==}
+    peerDependencies:
+      chart.js: '>=2.8.0'
+      date-fns: '>=2.0.0'
+
+  date-fns@4.1.0:
+    resolution: {integrity: sha512-Ukq0owbQXxa/U3EGtsdVBkR1w7KOQ5gIBqdH2hkvknzZPYvBxb/aa6E8L7tmjFtkwZBu3UXBbjIgPo/Ez4xaNg==}
+
+  htmx-ext-sse@2.2.2:
+    resolution: {integrity: sha512-MTnKkBzA2t4sI8gOXrRiPaceTlkUbrw3+3qOy1BfuBNIPBalsJiT4qxUGd6W48ggOkfe2akOnB8uxICJKw+Dsg==}
+
+  htmx.org@2.0.4:
+    resolution: {integrity: sha512-HLxMCdfXDOJirs3vBZl/ZLoY+c7PfM4Ahr2Ad4YXh6d22T5ltbTXFFkpx9Tgb2vvmWFMbIc3LqN2ToNkZJvyYQ==}
+
+  idiomorph@0.3.0:
+    resolution: {integrity: sha512-UhV1Ey5xCxIwR9B+OgIjQa+1Jx99XQ1vQHUsKBU1RpQzCx1u+b+N6SOXgf5mEJDqemUI/ffccu6+71l2mJUsRA==}
+
+snapshots:
+
+  '@kurkle/color@0.3.4': {}
+
+  chart.js@4.4.7:
+    dependencies:
+      '@kurkle/color': 0.3.4
+
+  chartjs-adapter-date-fns@3.0.0(chart.js@4.4.7)(date-fns@4.1.0):
+    dependencies:
+      chart.js: 4.4.7
+      date-fns: 4.1.0
+
+  date-fns@4.1.0: {}
+
+  htmx-ext-sse@2.2.2: {}
+
+  htmx.org@2.0.4: {}
+
+  idiomorph@0.3.0: {}

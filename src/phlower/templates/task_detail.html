@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ task_name }} — phlower{% endblock %}
+
+{% block head %}
+<script src="/static/node_modules/chart.js/dist/chart.umd.js"></script>
+<script src="/static/node_modules/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="/" class="back">&larr; Tasks</a>
+  <h1 class="mono">{{ task_name }}</h1>
+</div>
+
+<div hx-ext="sse" sse-connect="/api/stream">
+
+  {# -- metrics cards -- #}
+  <div id="task-metrics"
+       hx-get="/ui/partials/task-summary/{{ urlencode(task_name) }}"
+       hx-trigger="sse:task_update"
+       hx-swap="morph:innerHTML"
+       hx-on::after-settle="refreshCharts('{{ urlencode(task_name) }}')">
+    {% include 'partials/task_summary.html' %}
+  </div>
+
+  {# -- charts -- #}
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Latency (ms)</h3>
+      <canvas id="latency-chart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Throughput &amp; failures</h3>
+      <canvas id="throughput-chart"></canvas>
+    </div>
+  </div>
+
+  {# -- recent invocations -- #}
+  <h2>Recent invocations</h2>
+  <div id="invocation-table-wrap"
+       hx-get="/ui/partials/task-invocations/{{ urlencode(task_name) }}"
+       hx-trigger="sse:task_update"
+       hx-swap="morph:innerHTML">
+    {% include 'partials/invocation_table.html' %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+<script>
+  initCharts({{ latency_json | tojson }});
+</script>
+{% endblock %}

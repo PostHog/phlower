@@ -1,0 +1,6 @@
+{% if connected %}
+<span class="dot dot-ok"></span> broker connected
+{% else %}
+<span class="dot dot-err"></span> broker disconnected
+{% if error %}<span class="status-error" title="{{ error }}"> — {{ error[:60] }}</span>{% endif %}
+{% endif %}

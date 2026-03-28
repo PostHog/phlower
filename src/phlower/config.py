@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass, field
+
+
+def _parse_list(raw: str) -> list[str]:
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+@dataclass(frozen=True)
+class Config:
+    broker_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "CELERY_BROKER_URL", "redis://localhost:6379/0"
+        )
+    )
+    retention_hours: int = field(
+        default_factory=lambda: int(os.environ.get("RETENTION_HOURS", "24"))
+    )
+    max_global_invocations: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_GLOBAL_INVOCATIONS", "100000"))
+    )
+    max_invocations_per_task: int = field(
+        default_factory=lambda: int(
+            os.environ.get("MAX_INVOCATIONS_PER_TASK", "10000")
+        )
+    )
+    task_watchlist: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            _parse_list(os.environ.get("TASK_WATCHLIST", ""))
+        )
+    )
+    task_allowlist_regex: re.Pattern[str] = field(
+        default_factory=lambda: re.compile(
+            os.environ.get("TASK_ALLOWLIST_REGEX", ".*")
+        )
+    )
+    max_args_preview_chars: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_ARGS_PREVIEW_CHARS", "500"))
+    )
+    max_kwargs_preview_chars: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_KWARGS_PREVIEW_CHARS", "1000"))
+    )
+    success_sample_rate: float = field(
+        default_factory=lambda: float(os.environ.get("SUCCESS_SAMPLE_RATE", "0.1"))
+    )
+    max_runtime_buffer: int = field(
+        default_factory=lambda: int(
+            os.environ.get("MAX_RUNTIME_BUFFER_PER_TASK", "10000")
+        )
+    )
+    max_runtimes_per_bucket: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_RUNTIMES_PER_BUCKET", "500"))
+    )
+    sse_throttle_seconds: float = field(
+        default_factory=lambda: float(os.environ.get("SSE_THROTTLE_SECONDS", "1.0"))
+    )

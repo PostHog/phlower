@@ -1,0 +1,75 @@
+{% if summary %}
+<div class="metric-grid">
+  <div class="metric-card">
+    <span class="metric-val">{{ summary.total_count }}</span>
+    <span class="metric-label">Total (24 h)</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val st-success">{{ summary.success_count }}</span>
+    <span class="metric-label">Success</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val st-failure">{{ summary.failure_count }}</span>
+    <span class="metric-label">Failures</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val st-retry">{{ summary.retry_count }}</span>
+    <span class="metric-label">Retries</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val st-active">{{ summary.active_count }}</span>
+    <span class="metric-label">Active</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val {% if summary.failure_rate > 0.05 %}txt-fail{% endif %}">{{ fmt_rate(summary.failure_rate) }}</span>
+    <span class="metric-label">Failure rate</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val">{{ fmt_ms(summary.p50_ms) }}</span>
+    <span class="metric-label">p50</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val">{{ fmt_ms(summary.p95_ms) }}</span>
+    <span class="metric-label">p95</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-val">{{ fmt_ms(summary.p99_ms) }}</span>
+    <span class="metric-label">p99</span>
+  </div>
+</div>
+
+{% if summary.top_exceptions %}
+<div class="sub-section">
+  <h3>Top exceptions</h3>
+  <table class="data-table compact">
+    <tbody>
+      {% for exc, count in summary.top_exceptions %}
+      <tr>
+        <td class="mono txt-fail">{{ exc }}</td>
+        <td class="r num">{{ count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if summary.top_workers %}
+<div class="sub-section">
+  <h3>Worker distribution</h3>
+  <table class="data-table compact">
+    <tbody>
+      {% for worker, count in summary.top_workers %}
+      <tr>
+        <td class="mono">{{ worker }}</td>
+        <td class="r num">{{ count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state"><p>No data for this task.</p></div>
+{% endif %}

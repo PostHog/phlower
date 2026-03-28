@@ -1,0 +1,31 @@
+{% if results %}
+<p class="result-count">{{ results | length }} result{{ 's' if results | length != 1 }}</p>
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Task ID</th>
+      <th>Task name</th>
+      <th>State</th>
+      <th>Worker</th>
+      <th class="r">Runtime</th>
+      <th>Received</th>
+      <th>Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for inv in results %}
+    <tr>
+      <td><a href="/invocations/{{ inv.task_id }}" class="mono">{{ inv.task_id[:12] }}&hellip;</a></td>
+      <td><a href="/tasks/{{ urlencode(inv.task_name) }}" class="mono">{{ inv.task_name }}</a></td>
+      <td><span class="badge sm {{ state_class(inv.state.value) }}">{{ inv.state.value }}</span></td>
+      <td class="mono small">{{ inv.worker or '—' }}</td>
+      <td class="r num">{{ fmt_ms(inv.runtime_ms) }}</td>
+      <td class="small">{{ fmt_ts(inv.received_at) }}</td>
+      <td class="mono small txt-fail">{{ inv.exception_type or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state"><p>No results. Try adjusting your filters.</p></div>
+{% endif %}

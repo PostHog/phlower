@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Tasks — phlower{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Tasks</h1>
+  <span class="badge">{{ tasks | length }} tracked</span>
+</div>
+
+<div hx-ext="sse" sse-connect="/api/stream">
+  <div id="task-table-wrap"
+       hx-get="/ui/partials/task-table"
+       hx-trigger="sse:task_update"
+       hx-swap="morph:innerHTML">
+    {% include 'partials/task_table.html' %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% if tasks %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Task</th>
+      <th class="r">Total</th>
+      <th class="r">Active</th>
+      <th class="r">Fail rate</th>
+      <th class="r">p50</th>
+      <th class="r">p95</th>
+      <th class="r">p99</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in tasks %}
+    <tr class="{% if t.failure_rate > 0.1 %}row-warn{% elif t.failure_rate > 0.25 %}row-crit{% endif %}">
+      <td><a href="/tasks/{{ urlencode(t.task_name) }}" class="mono">{{ t.task_name }}</a></td>
+      <td class="r num">{{ t.total_count }}</td>
+      <td class="r num">{{ t.active_count }}</td>
+      <td class="r num {% if t.failure_rate > 0.05 %}txt-fail{% endif %}">{{ fmt_rate(t.failure_rate) }}</td>
+      <td class="r num">{{ fmt_ms(t.p50_ms) }}</td>
+      <td class="r num">{{ fmt_ms(t.p95_ms) }}</td>
+      <td class="r num">{{ fmt_ms(t.p99_ms) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+  <p>No tasks observed yet.</p>
+  <p class="hint">Make sure workers run with <code>-E</code> (events enabled) and the broker URL is correct.</p>
+</div>
+{% endif %}

@@ -86,8 +86,13 @@ _setup_globals(templates)
 
 @router.get("/", response_class=HTMLResponse)
 async def task_list_page(request: Request):
-    summaries = request.app.state.store.get_task_list()
-    return _render(request, "task_list.html", {"tasks": summaries})
+    store = request.app.state.store
+    summaries = store.get_task_list()
+    return _render(request, "task_list.html", {
+        "tasks": summaries,
+        "queues": store.get_known_queues(),
+        "workers": store.get_known_workers(),
+    })
 
 
 @router.get("/tasks/{task_name}", response_class=HTMLResponse)

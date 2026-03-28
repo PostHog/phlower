@@ -57,6 +57,52 @@ function applyBookmarks() {
 
   // Re-order: bookmarked first
   bookmarked.concat(rest).forEach(function(row) { tbody.appendChild(row); });
+
+  // Re-apply active filter after morph swap
+  reapplyFilter();
+}
+
+// -- task list filters (queue / worker pills) ------------------------------
+
+var _activeFilters = { queue: '', worker: '' };
+
+function filterBy(dimension, value) {
+  _activeFilters[dimension] = value;
+
+  // Update pill states
+  document.querySelectorAll('.filter-pill[data-filter="' + dimension + '"]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-val') === value);
+  });
+
+  applyFilter();
+}
+
+function applyFilter() {
+  var table = document.getElementById('task-table');
+  if (!table) return;
+
+  var rows = table.querySelectorAll('tbody tr[data-task]');
+  rows.forEach(function(row) {
+    var show = true;
+
+    if (_activeFilters.queue) {
+      var rowQueues = (row.getAttribute('data-queues') || '').split(',');
+      if (rowQueues.indexOf(_activeFilters.queue) === -1) show = false;
+    }
+
+    if (_activeFilters.worker) {
+      var rowWorkers = (row.getAttribute('data-workers') || '').split(',');
+      if (rowWorkers.indexOf(_activeFilters.worker) === -1) show = false;
+    }
+
+    row.style.display = show ? '' : 'none';
+  });
+}
+
+function reapplyFilter() {
+  if (_activeFilters.queue || _activeFilters.worker) {
+    applyFilter();
+  }
 }
 
 let latencyChart = null;

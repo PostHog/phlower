@@ -489,6 +489,13 @@ class Store:
                 queues.update(agg.queues.keys())
             return sorted(queues)
 
+    def get_known_workers(self) -> list[str]:
+        with self._lock:
+            workers: set[str] = set()
+            for agg in self.tasks.values():
+                workers.update(agg.workers.keys())
+            return sorted(workers)
+
     def search_invocations(
         self,
         *,

@@ -14,7 +14,7 @@
   </thead>
   <tbody>
     {% for t in tasks %}
-    <tr class="{% if t.failure_rate > 0.1 %}row-warn{% elif t.failure_rate > 0.25 %}row-crit{% endif %}" data-task="{{ t.task_name }}">
+    <tr class="{% if t.failure_rate > 0.1 %}row-warn{% elif t.failure_rate > 0.25 %}row-crit{% endif %}" data-task="{{ t.task_name }}" data-queues="{{ t.top_queues | map(attribute=0) | join(',') }}" data-workers="{{ t.top_workers | map(attribute=0) | join(',') }}">
       <td class="col-bm"><button class="bm-btn" onclick="toggleBookmark('{{ t.task_name }}')" title="Bookmark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></button></td>
       <td><a href="/tasks/{{ urlencode(t.task_name) }}" class="mono">{{ t.task_name }}</a></td>
       <td class="r num">{{ t.total_count }}</td>

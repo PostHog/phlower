@@ -160,6 +160,55 @@ main {
   letter-spacing: -0.02em;
 }
 
+/* ---------- filter bar ---------- */
+
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.filter-pill {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border: var(--border);
+  border-radius: 3px;
+  background: var(--bg-raised);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+.filter-pill:hover {
+  background: var(--bg-sunken);
+  color: var(--ink);
+}
+.filter-pill.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+}
+
 .back {
   font-size: 11px;
   color: var(--ink-3);

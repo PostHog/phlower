@@ -1,370 +1,72 @@
-# Codex Task Prompt — Lightweight Celery Task Debugger (Flower Alternative)
+# phlower
 
-## Goal
+Task-centric Celery monitoring. Single container, no database, live updates.
 
-Build a **single-container, lightweight Celery task debugging tool** focused on:
+Answers questions like:
+- Is this task healthy right now?
+- Did something regress in the last hours?
+- Why did this particular run fail?
+- Find the run tied to order #12345
 
-* inspecting **specific task types**
-* understanding **recent behavior (last 24h)**
-* debugging **individual task executions**
+Not a cluster monitoring tool — no worker/queue dashboards, no autoscaling metrics. Just task behavior.
 
-This is **not a cluster monitoring tool**.
-
-It should outperform Flower by focusing on:
-
-* task-centric debugging
-* fast lookup of specific runs
-* real metrics (latency, failure rates)
-* minimal infrastructure (no DB, ephemeral state)
-
----
-
-## Core Requirements
-
-### Must be:
-
-* **Single Docker container**
-* **Python-based (FastAPI)**
-* **No persistent database**
-* **In-memory only (bounded retention)**
-* **Easy local run (`docker run`)**
-* **Easy Kubernetes deployment (1 pod)**
-
-### Must NOT be:
-
-* multi-service architecture
-* heavy runtime (no multiple containers)
-* persistent analytics system
-* generic monitoring dashboard
-
----
-
-## Tech Stack
-
-### Backend
-
-* Python 3.11+
-* FastAPI
-* Uvicorn
-
-### Real-time updates
-
-* **Server-Sent Events (SSE)** (preferred over WebSockets)
-
-### Frontend
-
-* **HTMX + minimal JS**
-* no heavy React unless trivial
-
-### Celery integration
-
-* use **Celery event APIs**
-* do NOT parse Redis manually
-
----
-
-## Architecture Overview
-
-Single process:
-
-```
-Celery broker → FastAPI app (event consumer + state) → SSE → HTMX UI
-```
-
-Inside the app:
-
-* Celery event consumer (background task)
-* in-memory stores:
-
-  * aggregates
-  * recent invocations
-* HTTP API
-* SSE stream
-* server-rendered UI
-
----
-
-## Core Features
-
-### 1. Task List Page
-
-Show all known task names:
-
-* total executions (24h)
-* failure rate
-* active count
-* highlight “problematic” tasks
-
----
-
-### 2. Task Detail Page
-
-For a selected task:
-
-Show:
-
-* total count
-* success / failure / retry counts
-* **p50 / p95 / p99 runtime**
-* latency over time (1-minute buckets)
-* failure rate over time
-* worker distribution
-* exception distribution
-* recent invocations table
-
-Must update **live via SSE**
-
----
-
-### 3. Invocation Search
-
-Support:
-
-* task name
-* time range
-* task id
-* status
-* worker
-* free-text (`q`)
-
-Use cases:
-
-* “find send_email around 12:00”
-* “find failed invoice for order 123”
-
----
-
-### 4. Invocation Detail View
-
-Show:
-
-* task id
-* timestamps (received, started, finished)
-* runtime
-* worker
-* retries
-* state transitions
-* exception type
-* traceback snippet
-* args/kwargs preview (truncated)
-* extracted identifiers
-
----
-
-## Data Model (In-Memory Only)
-
-### A. Aggregates (all tasks)
-
-Per task, per minute:
-
-* count
-* success count
-* failure count
-* retry count
-* runtime histogram / buckets
-
-Retention:
-
-* 24h default
-
----
-
-### B. Invocation Records
-
-Store only:
-
-* failures
-* retries
-* watched tasks
-* sampled successes (optional)
-
-Each record:
-
-```json
-{
-  "task_id": "...",
-  "task_name": "...",
-  "state": "...",
-  "received_at": "...",
-  "started_at": "...",
-  "finished_at": "...",
-  "runtime_ms": 123,
-  "worker": "...",
-  "args_preview": "...",
-  "kwargs_preview": "...",
-  "exception_type": "...",
-  "exception_snippet": "...",
-  "traceback_snippet": "...",
-  "correlation_fields": {}
-}
-```
-
-Retention:
-
-* 24h (bounded by max size)
-
----
-
-## Celery Integration
-
-* connect via `CELERY_BROKER_URL`
-* consume events using Celery APIs
-* track:
-
-  * received
-  * started
-  * succeeded
-  * failed
-  * retried
-
-Compute runtime from timestamps.
-
-### Important
-
-Document clearly:
-
-* workers must run with events enabled (`-E`)
-
----
-
-## API Endpoints
-
-### Health
-
-* `GET /healthz`
-
-### Tasks
-
-* `GET /api/tasks`
-
-### Task detail
-
-* `GET /api/tasks/{task_name}/summary`
-* `GET /api/tasks/{task_name}/latency`
-* `GET /api/tasks/{task_name}/invocations`
-
-### Search
-
-* `GET /api/search/invocations`
-
-### Invocation
-
-* `GET /api/invocations/{task_id}`
-
-### Live stream
-
-* `GET /api/stream` (SSE)
-
----
-
-## SSE Behavior
-
-* push updates when:
-
-  * new invocation arrives
-  * aggregates change
-
-Event types:
-
-* `task_update`
-* `invocation_update`
-
----
-
-## Config (env vars)
-
-```
-CELERY_BROKER_URL=
-RETENTION_HOURS=24
-MAX_GLOBAL_INVOCATIONS=500000
-MAX_INVOCATIONS_PER_TASK=50000
-TASK_WATCHLIST=send_email,generate_invoice
-TASK_ALLOWLIST_REGEX=.*
-MAX_ARGS_PREVIEW_CHARS=500
-MAX_KWARGS_PREVIEW_CHARS=1000
-```
-
----
-
-## Docker Requirements
-
-Single Dockerfile:
-
-* lightweight image
-* runs FastAPI + event loop
-* exposes port 8000
-
-Must support:
+## Quick start
 
 ```bash
-docker run -p 8000:8000 \
-  -e CELERY_BROKER_URL=redis://host.docker.internal:6379/0 \
-  celery-task-viewer
+docker run -p 8100:8100 -e CELERY_BROKER_URL=redis://host.docker.internal:6379/0 phlower
 ```
 
----
+Workers must run with `-E` (events enabled).
 
-## Kubernetes Requirements
+Open `http://localhost:8100`.
 
-Provide:
+## What you get
 
-* Deployment (1 replica)
-* Service
-* ConfigMap (optional)
-* Secret example
+**Task list** — all observed task types with throughput, failure rate, p50/p95/p99 latency. Filter by queue or worker. Bookmark tasks you care about.
 
-No volumes required.
+**Task detail** — metric cards, latency + throughput charts (Chart.js), exception distribution, worker/queue distribution, recent invocations table.
 
----
+**Search** — find invocations by task name, status, worker, queue, task ID, or free-text across args/kwargs/errors.
 
-## UX Principles
+**Invocation detail** — full lifecycle (received → started → finished), runtime, worker, queue, args/kwargs preview, exception + traceback.
 
-* fast
-* minimal
-* developer-focused
-* task-first navigation
-* no dashboards for dashboards’ sake
+Everything updates live via SSE. DOM morphing (idiomorph) prevents flicker.
 
----
+## Running in Kubernetes
 
-## What Makes This Better Than Flower
+Single-pod deployment. See `k8s/` for manifests. No volumes needed — restart resets state by design.
 
-Must explicitly deliver:
+## Configuration
 
-* task-first UX
-* latency percentiles (p50/p95/p99)
-* failure rate over time
-* fast lookup of specific runs
-* correlation-based search
-* ephemeral, high-performance model
+All via environment variables:
 
-If these are not implemented, the tool is not acceptable.
+| Variable | Default | What it does |
+|----------|---------|-------------|
+| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker to connect to |
+| `PORT` | `8100` | HTTP port |
+| `RETENTION_HOURS` | `24` | How long to keep data |
+| `MAX_GLOBAL_INVOCATIONS` | `100000` | Total invocation records cap |
+| `MAX_INVOCATIONS_PER_TASK` | `10000` | Per-task invocation cap |
+| `SUCCESS_SAMPLE_RATE` | `0.1` | Fraction of successes to store (failures/retries always stored) |
+| `TASK_WATCHLIST` | | Comma-separated task names to always store fully |
+| `TASK_ALLOWLIST_REGEX` | `.*` | Only track tasks matching this pattern |
+| `SSE_THROTTLE_SECONDS` | `1.0` | How often to push SSE updates |
 
----
+## Development
 
-## Acceptance Criteria
+```bash
+uv sync
+cd src/phlower/static && pnpm install && cd -
+uv run python -m phlower
+```
 
-* runs as **one container**
-* connects to existing Celery broker
-* shows live task data
-* supports task-level analysis
-* supports invocation search
-* supports detailed inspection
-* no database required
-* restart resets state safely
+Use `scripts/fake_tasks.py` to generate test traffic:
 
----
+```bash
+uv run celery -A scripts.fake_tasks worker -E -l info -c 2
+uv run python scripts/fake_tasks.py
+```
 
-## Instruction to Codex
+## Redis pub/sub at scale
 
-Build a **working v1**, not scaffolding.
-
-Prioritize:
-
-* simplicity
-* correctness of event handling
-* bounded memory usage
-* fast UI
-* minimal dependencies
-
-Avoid overengineering.
+phlower subscribes only to `task.#` events (via routing key filter), excluding worker heartbeats. This prevents the pub/sub output buffer overflow that occurs when many workers (~60+) burst heartbeats simultaneously and exceed Redis/ElastiCache's `client-output-buffer-limit-pubsub`. Reconnects use exponential backoff (2s → 60s cap).

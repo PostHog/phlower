@@ -1,6 +1,63 @@
 /* ═══════════════════════════════════════════════════════
-   phlower — Chart.js + SSE-driven refresh
+   phlower — bookmarks, Chart.js, SSE-driven refresh
    ═══════════════════════════════════════════════════════ */
+
+// -- bookmarks (localStorage) ------------------------------------------
+
+function getBookmarks() {
+  try { return JSON.parse(localStorage.getItem('phlower_bookmarks') || '[]'); }
+  catch { return []; }
+}
+
+function saveBookmarks(bms) {
+  localStorage.setItem('phlower_bookmarks', JSON.stringify(bms));
+}
+
+var BM_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+var BM_SVG_FILLED = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+
+function toggleBookmark(taskName) {
+  var bms = getBookmarks();
+  var idx = bms.indexOf(taskName);
+  if (idx === -1) { bms.push(taskName); } else { bms.splice(idx, 1); }
+  saveBookmarks(bms);
+  applyBookmarks();
+  // Also update detail-page button if present
+  var detailBtn = document.getElementById('bm-detail-btn');
+  if (detailBtn) {
+    var active = bms.indexOf(taskName) !== -1;
+    detailBtn.innerHTML = active ? BM_SVG_FILLED : BM_SVG;
+    detailBtn.classList.toggle('bm-active', active);
+  }
+}
+
+function applyBookmarks() {
+  var bms = getBookmarks();
+  var table = document.getElementById('task-table');
+  if (!table) return;
+
+  var tbody = table.querySelector('tbody');
+  if (!tbody) return;
+
+  var rows = Array.from(tbody.querySelectorAll('tr[data-task]'));
+  var bookmarked = [];
+  var rest = [];
+
+  rows.forEach(function(row) {
+    var task = row.getAttribute('data-task');
+    var btn = row.querySelector('.bm-btn');
+    var isBm = bms.indexOf(task) !== -1;
+    if (btn) {
+      btn.innerHTML = isBm ? BM_SVG_FILLED : BM_SVG;
+      btn.classList.toggle('bm-active', isBm);
+    }
+    row.classList.toggle('bm-row', isBm);
+    if (isBm) { bookmarked.push(row); } else { rest.push(row); }
+  });
+
+  // Re-order: bookmarked first
+  bookmarked.concat(rest).forEach(function(row) { tbody.appendChild(row); });
+}
 
 let latencyChart = null;
 let throughputChart = null;

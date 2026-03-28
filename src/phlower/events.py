@@ -79,12 +79,14 @@ class CeleryEventConsumer:
     # -- handlers ---------------------------------------------------------
 
     def _on_received(self, event: dict) -> None:
+        queue = event.get("queue") or event.get("routing_key")
         self.store.process_received(
             task_id=event["uuid"],
             task_name=event.get("name", "unknown"),
             ts=event.get("timestamp") or time.time(),
             args=event.get("args"),
             kwargs=event.get("kwargs"),
+            queue=queue,
         )
 
     def _on_started(self, event: dict) -> None:

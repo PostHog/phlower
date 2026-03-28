@@ -18,6 +18,7 @@
       <tr><td>Finished</td><td>{{ fmt_ts_full(inv.finished_at) }}</td></tr>
       <tr><td>Runtime</td><td>{{ fmt_ms(inv.runtime_ms) }}</td></tr>
       <tr><td>Worker</td><td class="mono">{{ inv.worker or '—' }}</td></tr>
+      <tr><td>Queue</td><td class="mono">{{ inv.queue or '—' }}</td></tr>
       <tr><td>Retries</td><td>{{ inv.retries }}</td></tr>
     </table>
   </div>

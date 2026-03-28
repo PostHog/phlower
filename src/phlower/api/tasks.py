@@ -11,6 +11,7 @@ def _serialise_summary(s) -> dict:
     d = asdict(s)
     d["top_exceptions"] = [{"type": t, "count": c} for t, c in s.top_exceptions]
     d["top_workers"] = [{"worker": w, "count": c} for w, c in s.top_workers]
+    d["top_queues"] = [{"queue": q, "count": c} for q, c in s.top_queues]
     return d
 
 
@@ -59,6 +60,7 @@ def _serialise_record(r) -> dict:
         "finished_at": r.finished_at,
         "runtime_ms": r.runtime_ms,
         "worker": r.worker,
+        "queue": r.queue,
         "retries": r.retries,
         "exception_type": r.exception_type,
     }

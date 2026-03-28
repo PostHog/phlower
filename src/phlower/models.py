@@ -23,6 +23,7 @@ class InvocationRecord:
     finished_at: float | None = None
     runtime_ms: float | None = None
     worker: str | None = None
+    queue: str | None = None
     args_preview: str | None = None
     kwargs_preview: str | None = None
     exception_type: str | None = None
@@ -58,3 +59,4 @@ class TaskSummary:
     p99_ms: float | None
     top_exceptions: list[tuple[str, int]]
     top_workers: list[tuple[str, int]]
+    top_queues: list[tuple[str, int]]

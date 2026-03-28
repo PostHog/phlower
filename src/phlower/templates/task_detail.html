@@ -10,7 +10,18 @@
 <div class="page-header">
   <a href="/" class="back">&larr; Tasks</a>
   <h1 class="mono">{{ task_name }}</h1>
+  <button class="bm-btn bm-detail" onclick="toggleBookmark('{{ task_name }}')" title="Bookmark" id="bm-detail-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></button>
 </div>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var bms = JSON.parse(localStorage.getItem('phlower_bookmarks') || '[]');
+    var btn = document.getElementById('bm-detail-btn');
+    if (btn && bms.indexOf('{{ task_name }}') !== -1) {
+      btn.innerHTML = BM_SVG_FILLED;
+      btn.classList.add('bm-active');
+    }
+  });
+</script>
 
 <div hx-ext="sse" sse-connect="/api/stream">
 
@@ -48,7 +59,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/app.js"></script>
 <script>
   initCharts({{ latency_json | tojson }});
 </script>

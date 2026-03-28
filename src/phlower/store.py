@@ -47,6 +47,7 @@ class TaskAggregate:
         self.runtime_buffer: deque[float] = deque(maxlen=max_runtime_buffer)
         self.exceptions: Counter[str] = Counter()
         self.workers: Counter[str] = Counter()
+        self.queues: Counter[str] = Counter()
         self._max_runtimes_per_bucket = max_runtimes_per_bucket
 
     # -- mutations --------------------------------------------------------
@@ -66,6 +67,7 @@ class TaskAggregate:
         *,
         runtime_ms: float | None = None,
         worker: str | None = None,
+        queue: str | None = None,
         exception_type: str | None = None,
     ) -> None:
         bucket = self._get_or_create_bucket(ts)
@@ -85,6 +87,8 @@ class TaskAggregate:
 
         if worker:
             self.workers[worker] += 1
+        if queue:
+            self.queues[queue] += 1
         if exception_type:
             self.exceptions[exception_type] += 1
 
@@ -118,6 +122,7 @@ class TaskAggregate:
             p99_ms=percentile(sr, 99),
             top_exceptions=self.exceptions.most_common(10),
             top_workers=self.workers.most_common(10),
+            top_queues=self.queues.most_common(10),
         )
 
     def latency_series(self) -> list[dict]:
@@ -262,6 +267,7 @@ class Store:
         *,
         args: str | None = None,
         kwargs: str | None = None,
+        queue: str | None = None,
     ) -> None:
         with self._lock:
             if not self._should_track(task_name):
@@ -269,6 +275,7 @@ class Store:
             self._get_or_create_task(task_name)
             rec = self._ensure_record(task_id, task_name)
             rec.received_at = ts
+            rec.queue = queue
             rec.args_preview = (
                 args[: self.config.max_args_preview_chars] if args else None
             )
@@ -316,8 +323,9 @@ class Store:
 
             rec = self._ensure_record(task_id, name)
             worker = rec.worker
+            queue = rec.queue
             agg.record_terminal_event(
-                TaskState.SUCCESS, ts, runtime_ms=runtime_ms, worker=worker
+                TaskState.SUCCESS, ts, runtime_ms=runtime_ms, worker=worker, queue=queue
             )
 
             rec.state = TaskState.SUCCESS
@@ -358,11 +366,13 @@ class Store:
 
             rec = self._ensure_record(task_id, name)
             worker = rec.worker
+            queue = rec.queue
             agg.record_terminal_event(
                 TaskState.FAILURE,
                 ts,
                 runtime_ms=runtime_ms,
                 worker=worker,
+                queue=queue,
                 exception_type=exception_type,
             )
 
@@ -393,9 +403,11 @@ class Store:
             if not self._should_track(name):
                 return
             agg = self._get_or_create_task(name)
-            agg.record_terminal_event(TaskState.RETRY, ts, exception_type=exception_type)
 
             rec = self._ensure_record(task_id, name)
+            queue = rec.queue
+            agg.record_terminal_event(TaskState.RETRY, ts, exception_type=exception_type, queue=queue)
+
             rec.state = TaskState.RETRY
             rec.retries += 1
             rec.exception_type = exception_type
@@ -470,12 +482,20 @@ class Store:
         with self._lock:
             return self.invocations.get(task_id)
 
+    def get_known_queues(self) -> list[str]:
+        with self._lock:
+            queues: set[str] = set()
+            for agg in self.tasks.values():
+                queues.update(agg.queues.keys())
+            return sorted(queues)
+
     def search_invocations(
         self,
         *,
         task_name: str | None = None,
         status: str | None = None,
         worker: str | None = None,
+        queue: str | None = None,
         task_id: str | None = None,
         q: str | None = None,
         time_from: float | None = None,
@@ -498,6 +518,8 @@ class Store:
                     continue
                 if worker and rec.worker != worker:
                     continue
+                if queue and rec.queue != queue:
+                    continue
                 ts = rec.received_at or 0.0
                 if time_from and ts < time_from:
                     continue
@@ -515,6 +537,7 @@ class Store:
                                 rec.exception_type,
                                 rec.exception_message,
                                 rec.worker,
+                                rec.queue,
                             ],
                         )
                     ).lower()

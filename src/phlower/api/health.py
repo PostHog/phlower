@@ -16,4 +16,5 @@ async def healthz(request: Request) -> dict:
         "tasks_tracked": len(store.tasks),
         "invocations_stored": len(store.invocations),
         "sse_clients": request.app.state.broadcaster.client_count,
+        "queues": store.get_known_queues(),
     }

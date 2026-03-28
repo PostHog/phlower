@@ -54,6 +54,22 @@
 </div>
 {% endif %}
 
+{% if summary.top_queues %}
+<div class="sub-section">
+  <h3>Queue distribution</h3>
+  <table class="data-table compact">
+    <tbody>
+      {% for queue, count in summary.top_queues %}
+      <tr>
+        <td class="mono">{{ queue }}</td>
+        <td class="r num">{{ count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 {% if summary.top_workers %}
 <div class="sub-section">
   <h3>Worker distribution</h3>

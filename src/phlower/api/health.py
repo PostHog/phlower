@@ -13,6 +13,7 @@ async def healthz(request: Request) -> dict:
         "status": "ok",
         "broker_connected": consumer.connected,
         "broker_error": consumer.last_error,
+        "broker_reconnects": consumer.reconnect_count,
         "tasks_tracked": len(store.tasks),
         "invocations_stored": len(store.invocations),
         "sse_clients": request.app.state.broadcaster.client_count,

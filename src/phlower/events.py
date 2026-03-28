@@ -24,6 +24,7 @@ class CeleryEventConsumer:
         self._thread: threading.Thread | None = None
         self.connected: bool = False
         self.last_error: str | None = None
+        self.reconnect_count: int = 0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -53,6 +54,7 @@ class CeleryEventConsumer:
                         was_connected = True
                     self.connected = True
                     self.last_error = None
+                    self.reconnect_count = 0
                     recv = app.events.Receiver(
                         conn,
                         handlers={
@@ -62,6 +64,10 @@ class CeleryEventConsumer:
                             "task-failed": self._on_failed,
                             "task-retried": self._on_retried,
                         },
+                        # Only subscribe to task.* events — excludes worker
+                        # heartbeats which can burst and overflow Redis
+                        # pub/sub output buffers (client-output-buffer-limit).
+                        routing_key="task.#",
                     )
                     recv.capture(limit=None, timeout=1.0, wakeup=True)
             except (socket.timeout, TimeoutError, Empty):
@@ -70,11 +76,17 @@ class CeleryEventConsumer:
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)
+                self.reconnect_count += 1
                 was_connected = False
                 if self._stop.is_set():
                     break
-                logger.warning("Broker connection lost — retrying in 5 s (%s)", exc)
-                self._stop.wait(5)
+                # Exponential backoff: 2s, 4s, 8s, ... capped at 60s
+                delay = min(60, 2 ** min(self.reconnect_count, 6))
+                logger.warning(
+                    "Broker connection lost (attempt %d) — retrying in %ds (%s)",
+                    self.reconnect_count, delay, exc,
+                )
+                self._stop.wait(delay)
 
     # -- handlers ---------------------------------------------------------
 

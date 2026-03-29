@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
 
+from markupsafe import Markup
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -63,6 +65,28 @@ def _state_class(state: str) -> str:
     }.get(state, "")
 
 
+def _sparkline_svg(values: list[int], width: int = 80, height: int = 20) -> str:
+    """Render an inline SVG sparkline from a list of counts."""
+    if not values or max(values) == 0:
+        return Markup(f'<svg width="{width}" height="{height}" class="sparkline"></svg>')
+    peak = max(values)
+    n = len(values)
+    points = []
+    for i, v in enumerate(values):
+        x = round(i / max(n - 1, 1) * width, 1)
+        y = round(height - (v / peak * (height - 2)) - 1, 1)
+        points.append(f"{x},{y}")
+    poly = " ".join(points)
+    # Fill area under the line
+    fill_points = f"0,{height} {poly} {width},{height}"
+    return Markup(
+        f'<svg width="{width}" height="{height}" class="sparkline" viewBox="0 0 {width} {height}">'
+        f'<polyline points="{fill_points}" fill="var(--blue)" fill-opacity="0.08" stroke="none"/>'
+        f'<polyline points="{poly}" fill="none" stroke="var(--blue)" stroke-width="1.2" stroke-linejoin="round"/>'
+        f'</svg>'
+    )
+
+
 def _setup_globals(t: Jinja2Templates) -> None:
     t.env.globals["fmt_ms"] = _fmt_ms
     t.env.globals["fmt_rate"] = _fmt_rate
@@ -70,6 +94,7 @@ def _setup_globals(t: Jinja2Templates) -> None:
     t.env.globals["fmt_ts_full"] = _fmt_ts_full
     t.env.globals["state_class"] = _state_class
     t.env.globals["urlencode"] = quote
+    t.env.globals["sparkline_svg"] = _sparkline_svg
 
 
 def _render(request: Request, template: str, ctx: dict | None = None):

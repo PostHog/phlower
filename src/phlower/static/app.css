@@ -385,6 +385,10 @@ h3 {
   background: #FCDADA;
 }
 
+/* sparklines */
+.col-spark { padding: 2px 6px !important; vertical-align: middle; }
+.sparkline { display: block; }
+
 /* bookmarks */
 .col-bm { width: 28px; text-align: center; }
 

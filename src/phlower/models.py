@@ -60,3 +60,4 @@ class TaskSummary:
     top_exceptions: list[tuple[str, int]]
     top_workers: list[tuple[str, int]]
     top_queues: list[tuple[str, int]]
+    sparkline: list[int] = field(default_factory=list)

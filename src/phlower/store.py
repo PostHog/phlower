@@ -123,7 +123,16 @@ class TaskAggregate:
             top_exceptions=self.exceptions.most_common(10),
             top_workers=self.workers.most_common(10),
             top_queues=self.queues.most_common(10),
+            sparkline=self.sparkline(),
         )
+
+    def sparkline(self, minutes: int = 60) -> list[int]:
+        """Last N minutes of throughput counts for an inline sparkline."""
+        now = int(time.time()) // 60 * 60
+        return [
+            self.buckets[ts].count if ts in self.buckets else 0
+            for ts in range(now - (minutes - 1) * 60, now + 60, 60)
+        ]
 
     def latency_series(self) -> list[dict]:
         """Per-minute latency + throughput data suitable for charting."""
@@ -457,7 +466,7 @@ class Store:
     def get_task_list(self) -> list[TaskSummary]:
         with self._lock:
             summaries = [agg.summary() for agg in self.tasks.values()]
-        summaries.sort(key=lambda s: s.total_count, reverse=True)
+        summaries.sort(key=lambda s: s.task_name)
         return summaries
 
     def get_task_summary(self, task_name: str) -> TaskSummary | None:

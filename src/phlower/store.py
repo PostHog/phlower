@@ -481,8 +481,8 @@ class Store:
         """Track an incoming event for rate computation."""
         self._event_timestamps.append(time.time())
 
-    def events_per_second(self, window: float = 10.0) -> float:
-        """Average events/sec over the last N seconds."""
+    def events_per_second(self, window: float = 1.0) -> float:
+        """Events/sec over the last N seconds. Default 1s for raw jittery feel."""
         now = time.time()
         cutoff = now - window
         # Trim old entries from the left

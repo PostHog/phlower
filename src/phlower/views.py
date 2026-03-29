@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -39,19 +40,13 @@ def _fmt_rate(val: float) -> str:
 def _fmt_ts(val: float | None) -> str:
     if val is None:
         return "—"
-    from datetime import datetime, timezone
-
-    dt = datetime.fromtimestamp(val, tz=timezone.utc)
-    return dt.strftime("%H:%M:%S")
+    return datetime.fromtimestamp(val, tz=timezone.utc).strftime("%H:%M:%S")
 
 
 def _fmt_ts_full(val: float | None) -> str:
     if val is None:
         return "—"
-    from datetime import datetime, timezone
-
-    dt = datetime.fromtimestamp(val, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.fromtimestamp(val, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _state_class(state: str) -> str:
@@ -67,9 +62,9 @@ def _state_class(state: str) -> str:
 
 def _sparkline_svg(values: list[int], width: int = 80, height: int = 20) -> str:
     """Render an inline SVG sparkline from a list of counts."""
-    if not values or max(values) == 0:
+    peak = max(values) if values else 0
+    if peak == 0:
         return Markup(f'<svg width="{width}" height="{height}" class="sparkline"></svg>')
-    peak = max(values)
     n = len(values)
     points = []
     for i, v in enumerate(values):

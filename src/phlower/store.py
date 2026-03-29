@@ -6,6 +6,7 @@ import random
 import threading
 import time
 from collections import Counter, defaultdict, deque
+from itertools import islice
 
 from .config import Config
 from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary
@@ -45,6 +46,7 @@ class TaskAggregate:
         self.buckets: dict[int, MinuteBucket] = {}
         self.active_count: int = 0
         self.runtime_buffer: deque[float] = deque(maxlen=max_runtime_buffer)
+        self._sorted_cache: list[float] | None = None
         self.exceptions: Counter[str] = Counter()
         self.workers: Counter[str] = Counter()
         self.queues: Counter[str] = Counter()
@@ -82,6 +84,7 @@ class TaskAggregate:
 
         if runtime_ms is not None:
             self.runtime_buffer.append(runtime_ms)
+            self._sorted_cache = None
             if len(bucket.runtimes) < self._max_runtimes_per_bucket:
                 bucket.runtimes.append(runtime_ms)
 
@@ -117,7 +120,9 @@ class TaskAggregate:
             failure += b.failure
             retry += b.retry
 
-        sr = sorted(self.runtime_buffer) if self.runtime_buffer else []
+        if self._sorted_cache is None:
+            self._sorted_cache = sorted(self.runtime_buffer) if self.runtime_buffer else []
+        sr = self._sorted_cache
 
         return TaskSummary(
             task_name=self.task_name,
@@ -212,14 +217,9 @@ class Store:
     def _evict_global(self) -> None:
         while len(self.invocations) > self.config.max_global_invocations:
             oldest_id = self._invocation_order.popleft()
-            rec = self.invocations.pop(oldest_id, None)
-            if rec:
-                dq = self.invocations_by_task.get(rec.task_name)
-                if dq:
-                    try:
-                        dq.remove(oldest_id)
-                    except ValueError:
-                        pass
+            self.invocations.pop(oldest_id, None)
+            # Per-task deque entries become stale — readers filter via
+            # `if tid in self.invocations` so no O(n) dq.remove() needed.
 
     def _evict_per_task(self, task_name: str) -> None:
         dq = self.invocations_by_task.get(task_name)
@@ -355,12 +355,6 @@ class Store:
 
             if not self._should_store_invocation(rec):
                 self.invocations.pop(task_id, None)
-                dq = self.invocations_by_task.get(name)
-                if dq:
-                    try:
-                        dq.remove(task_id)
-                    except ValueError:
-                        pass
             else:
                 self._new_invocation_ids.append(task_id)
 
@@ -447,29 +441,31 @@ class Store:
             for agg in self.tasks.values():
                 agg.evict_old_buckets(cutoff_minute)
 
-            to_remove: list[str] = []
-            for task_id, rec in self.invocations.items():
+            # _invocation_order is oldest-first — pop from front until
+            # we hit a non-expired record. O(evicted) instead of O(total).
+            # Per-task deque entries become stale but readers already
+            # tolerate missing IDs via `if tid in self.invocations`.
+            while self._invocation_order:
+                task_id = self._invocation_order[0]
+                rec = self.invocations.get(task_id)
+                if rec is None:
+                    self._invocation_order.popleft()
+                    continue
                 ts = rec.finished_at or rec.started_at or rec.received_at
                 if ts is not None and ts < cutoff:
-                    to_remove.append(task_id)
-
-            for task_id in to_remove:
-                rec = self.invocations.pop(task_id)
-                dq = self.invocations_by_task.get(rec.task_name)
-                if dq:
-                    try:
-                        dq.remove(task_id)
-                    except ValueError:
-                        pass
+                    self._invocation_order.popleft()
+                    self.invocations.pop(task_id, None)
+                else:
+                    break
 
     # -- SSE dirty tracking -----------------------------------------------
 
     def flush_dirty(self) -> tuple[set[str], list[str]]:
         with self._lock:
-            tasks = self._dirty_tasks.copy()
-            invocations = self._new_invocation_ids.copy()
-            self._dirty_tasks.clear()
-            self._new_invocation_ids.clear()
+            tasks = self._dirty_tasks
+            invocations = self._new_invocation_ids
+            self._dirty_tasks = set()
+            self._new_invocation_ids = []
             return tasks, invocations
 
     # -- read methods (called from async handlers) ------------------------
@@ -495,7 +491,7 @@ class Store:
     ) -> list[InvocationRecord]:
         with self._lock:
             dq = self.invocations_by_task.get(task_name, deque())
-            ids = list(reversed(dq))[offset : offset + limit]
+            ids = list(islice(reversed(dq), offset, offset + limit))
             return [self.invocations[tid] for tid in ids if tid in self.invocations]
 
     def get_invocation(self, task_id: str) -> InvocationRecord | None:
@@ -535,13 +531,20 @@ class Store:
                 rec = self.invocations.get(task_id)
                 return [rec] if rec else []
 
-            results: list[InvocationRecord] = []
+            # Iterate newest-first via _invocation_order (already time-ordered).
+            # Early exit after offset+limit matches — avoids full scan + sort.
             q_lower = q.lower() if q else None
+            status_upper = status.upper() if status else None
+            results: list[InvocationRecord] = []
+            skipped = 0
 
-            for rec in self.invocations.values():
+            for tid in reversed(self._invocation_order):
+                rec = self.invocations.get(tid)
+                if rec is None:
+                    continue
                 if task_name and rec.task_name != task_name:
                     continue
-                if status and rec.state.value != status.upper():
+                if status_upper and rec.state.value != status_upper:
                     continue
                 if worker and rec.worker != worker:
                     continue
@@ -556,7 +559,7 @@ class Store:
                     haystack = " ".join(
                         filter(
                             None,
-                            [
+                            (
                                 rec.task_id,
                                 rec.task_name,
                                 rec.args_preview,
@@ -565,12 +568,16 @@ class Store:
                                 rec.exception_message,
                                 rec.worker,
                                 rec.queue,
-                            ],
+                            ),
                         )
                     ).lower()
                     if q_lower not in haystack:
                         continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
                 results.append(rec)
+                if len(results) >= limit:
+                    break
 
-            results.sort(key=lambda r: r.received_at or 0.0, reverse=True)
-            return results[offset : offset + limit]
+            return results

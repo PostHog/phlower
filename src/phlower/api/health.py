@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Request
 
 router = APIRouter()
@@ -14,6 +16,22 @@ async def meta(request: Request) -> dict:
         "worker_groups": consumer.registry.all_groups(),
         "workers_seen": consumer.registry.worker_count(),
         "last_inspect_at": consumer.registry.last_inspect_at,
+    }
+
+
+@router.get("/api/stats")
+async def stats(request: Request) -> dict:
+    """Live stats for the nav bar ticker."""
+    store = request.app.state.store
+    started_at = request.app.state.started_at
+    uptime = time.time() - started_at
+    retention = store.config.retention_hours * 3600
+    return {
+        "events_per_sec": round(store.events_per_second(), 1),
+        "tasks_tracked": len(store.tasks),
+        "uptime_sec": round(uptime),
+        "retention_sec": retention,
+        "broker_connected": request.app.state.consumer.connected,
     }
 
 

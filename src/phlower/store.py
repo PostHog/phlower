@@ -199,6 +199,9 @@ class Store:
         self._dirty_tasks: set[str] = set()
         self._new_invocation_ids: list[str] = []
 
+        # rolling event counter for tasks/sec display
+        self._event_timestamps: deque[float] = deque()
+
     # -- internal helpers (call with lock held) ---------------------------
 
     def _should_track(self, task_name: str) -> bool:
@@ -304,6 +307,7 @@ class Store:
             )
             rec.transitions.append((TaskState.RECEIVED, ts))
             self._dirty_tasks.add(task_name)
+            self.record_event()
 
     def process_started(
         self,
@@ -472,6 +476,20 @@ class Store:
             self._dirty_tasks = set()
             self._new_invocation_ids = []
             return tasks, invocations
+
+    def record_event(self) -> None:
+        """Track an incoming event for rate computation."""
+        self._event_timestamps.append(time.time())
+
+    def events_per_second(self, window: float = 10.0) -> float:
+        """Average events/sec over the last N seconds."""
+        now = time.time()
+        cutoff = now - window
+        # Trim old entries from the left
+        while self._event_timestamps and self._event_timestamps[0] < cutoff:
+            self._event_timestamps.popleft()
+        count = len(self._event_timestamps)
+        return count / window if count else 0.0
 
     # -- read methods (called from async handlers) ------------------------
 

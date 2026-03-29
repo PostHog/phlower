@@ -116,9 +116,19 @@ a:hover { color: #1338cc; }
   font-family: var(--mono);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   height: 100%;
 }
+
+.nav-ticker { display: flex; align-items: baseline; gap: 1px; }
+.ticker-rate {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.ticker-unit { font-size: 10px; color: var(--ink-3); }
+.ticker-uptime { font-size: 10px; color: var(--ink-muted); }
 
 .dot {
   width: 7px; height: 7px;

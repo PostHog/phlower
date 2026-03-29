@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
     app.state.broadcaster = broadcaster
     app.state.config = config
     app.state.consumer = consumer
+    app.state.started_at = time.time()
 
     logger.info(
         "phlower started — broker=%s retention=%dh max_invocations=%d",

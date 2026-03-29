@@ -1,10 +1,8 @@
+.venv/
+.git/
+.claude/
 __pycache__/
 *.pyc
 *.egg-info/
-dist/
-build/
-.venv/
-.env
-node_modules/
-frontend_dist/
+frontend/node_modules/
 src/phlower/frontend_dist/

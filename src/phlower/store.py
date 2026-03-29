@@ -99,6 +99,16 @@ class TaskAggregate:
 
     # -- reads ------------------------------------------------------------
 
+    def _recent_rate(self, window_minutes: int = 5) -> float:
+        """Average tasks/min over the last N minutes."""
+        now = int(time.time()) // 60 * 60
+        total = sum(
+            self.buckets[ts].count
+            for ts in range(now - (window_minutes - 1) * 60, now + 60, 60)
+            if ts in self.buckets
+        )
+        return total / window_minutes
+
     def summary(self) -> TaskSummary:
         total = success = failure = retry = 0
         for b in self.buckets.values():
@@ -120,6 +130,7 @@ class TaskAggregate:
             p50_ms=percentile(sr, 50),
             p95_ms=percentile(sr, 95),
             p99_ms=percentile(sr, 99),
+            rate_per_min=self._recent_rate(),
             top_exceptions=self.exceptions.most_common(10),
             top_workers=self.workers.most_common(10),
             top_queues=self.queues.most_common(10),

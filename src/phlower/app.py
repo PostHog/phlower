@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
@@ -17,7 +18,7 @@ from .store import Store
 
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = Path(__file__).parent / "static"
+FRONTEND_DIR = Path(__file__).parent / "frontend_dist"
 
 
 # ---------------------------------------------------------------------------
@@ -93,15 +94,33 @@ def create_app() -> FastAPI:
     from .api.invocations import router as inv_router
     from .api.stream import router as stream_router
     from .api.tasks import router as tasks_router
-    from .views import router as views_router
 
     app = FastAPI(title="phlower", lifespan=lifespan)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(health_router)
     app.include_router(tasks_router)
     app.include_router(inv_router)
     app.include_router(stream_router)
-    app.include_router(views_router)
+
+    # Serve React SPA — static assets + catch-all for client-side routing
+    if FRONTEND_DIR.exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(FRONTEND_DIR / "assets")),
+            name="assets",
+        )
+
+        @app.get("/{path:path}")
+        async def spa_catchall(path: str):
+            # Serve actual files if they exist, otherwise index.html for SPA routing
+            file = FRONTEND_DIR / path
+            if file.is_file():
+                return FileResponse(file)
+            return FileResponse(FRONTEND_DIR / "index.html")
+    else:
+        logger.warning(
+            "Frontend not built — run 'cd frontend && pnpm build'. "
+            "API endpoints are still available."
+        )
 
     return app

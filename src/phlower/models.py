@@ -59,5 +59,6 @@ class TaskSummary:
     p99_ms: float | None
     top_exceptions: list[tuple[str, int]]
     top_workers: list[tuple[str, int]]
+    rate_per_min: float
     top_queues: list[tuple[str, int]]
     sparkline: list[int] = field(default_factory=list)

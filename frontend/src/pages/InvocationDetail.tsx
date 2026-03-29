@@ -28,6 +28,9 @@ export function InvocationDetail() {
     );
   }
 
+  // Build a map of transition states for badge display
+  const transitionMap = new Map(inv.transitions.map((t) => [t.state, t.ts]));
+
   return (
     <>
       <div className="page-header">
@@ -42,40 +45,25 @@ export function InvocationDetail() {
       </div>
 
       <div className="detail-grid">
-        {/* Lifecycle */}
+        {/* Lifecycle — merged with state transitions */}
         <div className="detail-card">
           <h3>Lifecycle</h3>
           <table className="kv">
             <tbody>
-              <tr><td>Received</td><td>{fmtTsFull(inv.received_at)}</td></tr>
-              <tr><td>Started</td><td>{fmtTsFull(inv.started_at)}</td></tr>
-              <tr><td>Finished</td><td>{fmtTsFull(inv.finished_at)}</td></tr>
+              <LifecycleRow label="Received" ts={inv.received_at} state={transitionMap.has("RECEIVED") ? "RECEIVED" : undefined} />
+              <LifecycleRow label="Started" ts={inv.started_at} state={transitionMap.has("STARTED") ? "STARTED" : undefined} />
+              <LifecycleRow label="Finished" ts={inv.finished_at} state={inv.state !== "RECEIVED" && inv.state !== "STARTED" ? inv.state : undefined} />
               <tr><td>Runtime</td><td>{fmtMs(inv.runtime_ms)}</td></tr>
               <tr><td>Worker</td><td className="mono">{inv.worker || "\u2014"}</td></tr>
               <tr><td>Queue</td><td className="mono">{inv.queue || "\u2014"}</td></tr>
-              <tr><td>Retries</td><td>{inv.retries}</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        {/* State transitions */}
-        <div className="detail-card">
-          <h3>State transitions</h3>
-          <table className="kv">
-            <tbody>
-              {inv.transitions.map((t, i) => (
-                <tr key={i}>
-                  <td><Badge state={t.state} small /></td>
-                  <td>{fmtTsFull(t.ts)}</td>
-                </tr>
-              ))}
+              {inv.retries > 0 && <tr><td>Retries</td><td>{inv.retries}</td></tr>}
             </tbody>
           </table>
         </div>
 
         {/* Arguments */}
         {(inv.args_preview || inv.kwargs_preview) && (
-          <div className="detail-card wide">
+          <div className="detail-card">
             <h3>Arguments</h3>
             {inv.args_preview && (
               <div className="code-block">
@@ -107,5 +95,17 @@ export function InvocationDetail() {
         )}
       </div>
     </>
+  );
+}
+
+function LifecycleRow({ label, ts, state }: { label: string; ts: number | null; state?: string }) {
+  return (
+    <tr>
+      <td>{label}</td>
+      <td>
+        {state && <Badge state={state} small />}{" "}
+        {fmtTsFull(ts)}
+      </td>
+    </tr>
   );
 }

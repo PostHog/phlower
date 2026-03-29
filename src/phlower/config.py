@@ -55,5 +55,5 @@ class Config:
         default_factory=lambda: int(os.environ.get("MAX_RUNTIMES_PER_BUCKET", "500"))
     )
     sse_throttle_seconds: float = field(
-        default_factory=lambda: float(os.environ.get("SSE_THROTTLE_SECONDS", "1.0"))
+        default_factory=lambda: float(os.environ.get("SSE_THROTTLE_SECONDS", "0.3"))
     )

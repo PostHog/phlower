@@ -12,14 +12,18 @@ from celery import Celery
 
 from .config import Config
 from .store import Store
+from .workers import WorkerRegistry
 
 logger = logging.getLogger(__name__)
+
+INSPECT_INTERVAL = 60  # seconds
 
 
 class CeleryEventConsumer:
     def __init__(self, config: Config, store: Store) -> None:
         self.config = config
         self.store = store
+        self.registry = WorkerRegistry()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.connected: bool = False
@@ -45,6 +49,7 @@ class CeleryEventConsumer:
     def _run(self) -> None:
         app = Celery(broker=self.config.broker_url)
         was_connected = False
+        last_inspect = 0.0
 
         while not self._stop.is_set():
             try:
@@ -55,6 +60,13 @@ class CeleryEventConsumer:
                     self.connected = True
                     self.last_error = None
                     self.reconnect_count = 0
+
+                    # Run inspect on connect and periodically
+                    now = time.time()
+                    if now - last_inspect > INSPECT_INTERVAL:
+                        self.registry.update(app)
+                        last_inspect = now
+
                     recv = app.events.Receiver(
                         conn,
                         handlers={
@@ -71,7 +83,14 @@ class CeleryEventConsumer:
                     )
                     recv.capture(limit=None, timeout=1.0, wakeup=True)
             except (socket.timeout, TimeoutError, Empty):
-                # Normal timeout when no events arrive — just loop back
+                # Normal timeout — check if inspect is due, then loop back
+                now = time.time()
+                if now - last_inspect > INSPECT_INTERVAL:
+                    try:
+                        self.registry.update(app)
+                        last_inspect = now
+                    except Exception:
+                        pass
                 continue
             except Exception as exc:
                 self.connected = False
@@ -80,7 +99,6 @@ class CeleryEventConsumer:
                 was_connected = False
                 if self._stop.is_set():
                     break
-                # Exponential backoff: 2s, 4s, 8s, ... capped at 60s
                 delay = min(60, 2 ** min(self.reconnect_count, 6))
                 logger.warning(
                     "Broker connection lost (attempt %d) — retrying in %ds (%s)",
@@ -88,25 +106,46 @@ class CeleryEventConsumer:
                 )
                 self._stop.wait(delay)
 
+    # -- queue enrichment -------------------------------------------------
+
+    def _resolve_queue(self, event: dict) -> str | None:
+        """Best-effort queue: event field → worker inspect data → None."""
+        queue = event.get("queue") or event.get("routing_key")
+        if queue:
+            return queue
+        hostname = event.get("hostname")
+        if hostname:
+            queues = self.registry.queues_for_worker(hostname)
+            if len(queues) == 1:
+                return queues[0]
+        return None
+
+    def _resolve_worker_group(self, hostname: str | None) -> str | None:
+        if not hostname:
+            return None
+        return self.registry.group_for_worker(hostname)
+
     # -- handlers ---------------------------------------------------------
 
     def _on_received(self, event: dict) -> None:
-        queue = event.get("queue") or event.get("routing_key")
         self.store.process_received(
             task_id=event["uuid"],
             task_name=event.get("name", "unknown"),
             ts=event.get("timestamp") or time.time(),
             args=event.get("args"),
             kwargs=event.get("kwargs"),
-            queue=queue,
+            queue=self._resolve_queue(event),
         )
 
     def _on_started(self, event: dict) -> None:
+        hostname = event.get("hostname")
         self.store.process_started(
             task_id=event["uuid"],
             ts=event.get("timestamp") or time.time(),
             task_name=event.get("name"),
-            worker=event.get("hostname"),
+            worker=hostname,
+            worker_group=self._resolve_worker_group(hostname),
+            queue=self._resolve_queue(event),
         )
 
     def _on_succeeded(self, event: dict) -> None:
@@ -123,7 +162,6 @@ class CeleryEventConsumer:
         exception_str = event.get("exception", "")
         exc_type = exception_str.split("(")[0] if exception_str else None
 
-        # Try to extract task name from NotRegistered errors
         task_name = event.get("name")
         if not task_name and exc_type == "NotRegistered" and "'" in exception_str:
             task_name = exception_str.split("'")[1]

@@ -23,6 +23,7 @@ class InvocationRecord:
     finished_at: float | None = None
     runtime_ms: float | None = None
     worker: str | None = None
+    worker_group: str | None = None
     queue: str | None = None
     args_preview: str | None = None
     kwargs_preview: str | None = None

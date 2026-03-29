@@ -14,13 +14,15 @@ export function TaskList() {
     refetchInterval: 2000,
   });
 
-  const { isBookmarked } = useBookmarks();
-  const [workerFilter, setWorkerFilter] = useState("");
+  const { data: meta } = useQuery({
+    queryKey: ["meta"],
+    queryFn: api.meta,
+    refetchInterval: 30000,
+  });
 
-  // Collect known workers from data
-  const workers = [
-    ...new Set(tasks.flatMap((t) => t.top_workers.map((w) => w.worker))),
-  ].sort();
+  const { isBookmarked } = useBookmarks();
+  const [queueFilter, setQueueFilter] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
 
   // Sort: bookmarked first, then alphabetical
   const sorted = [...tasks].sort((a, b) => {
@@ -30,10 +32,17 @@ export function TaskList() {
     return a.task_name.localeCompare(b.task_name);
   });
 
-  // Filter by worker
-  const filtered = workerFilter
-    ? sorted.filter((t) => t.top_workers.some((w) => w.worker === workerFilter))
-    : sorted;
+  // Filter by queue or worker group
+  const filtered = sorted.filter((t) => {
+    if (queueFilter && !t.top_queues.some((q) => q.queue === queueFilter))
+      return false;
+    if (groupFilter && !t.top_workers.some((w) => w.worker.includes(groupFilter)))
+      return false;
+    return true;
+  });
+
+  // Compute per-queue sparklines for the filter pills
+  const queueSparklines = computeQueueSparklines(tasks, meta?.queues || []);
 
   return (
     <>
@@ -42,26 +51,47 @@ export function TaskList() {
         <span className="badge">{tasks.length} tracked</span>
       </div>
 
-      {workers.length > 0 && (
+      {(meta?.queues?.length || meta?.worker_groups?.length) ? (
         <div className="filter-bar">
-          <div className="filter-group">
-            <span className="filter-label">Worker</span>
-            <FilterPill
-              label="All"
-              active={workerFilter === ""}
-              onClick={() => setWorkerFilter("")}
-            />
-            {workers.map((w) => (
+          {meta?.queues && meta.queues.length > 0 && (
+            <div className="filter-group">
+              <span className="filter-label">Queue</span>
               <FilterPill
-                key={w}
-                label={w}
-                active={workerFilter === w}
-                onClick={() => setWorkerFilter(w)}
+                label="All"
+                active={queueFilter === ""}
+                onClick={() => setQueueFilter("")}
               />
-            ))}
-          </div>
+              {meta.queues.map((q) => (
+                <FilterPill
+                  key={q}
+                  label={q}
+                  active={queueFilter === q}
+                  onClick={() => setQueueFilter(q)}
+                  sparkline={queueSparklines[q]}
+                />
+              ))}
+            </div>
+          )}
+          {meta?.worker_groups && meta.worker_groups.length > 0 && (
+            <div className="filter-group">
+              <span className="filter-label">Worker</span>
+              <FilterPill
+                label="All"
+                active={groupFilter === ""}
+                onClick={() => setGroupFilter("")}
+              />
+              {meta.worker_groups.map((g) => (
+                <FilterPill
+                  key={g}
+                  label={g}
+                  active={groupFilter === g}
+                  onClick={() => setGroupFilter(g)}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      ) : null}
 
       {filtered.length > 0 ? (
         <table className="data-table" id="task-table">
@@ -141,17 +171,45 @@ function FilterPill({
   label,
   active,
   onClick,
+  sparkline,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
+  sparkline?: number[];
 }) {
   return (
     <button
-      className={`filter-pill${active ? " active" : ""}`}
+      className={`filter-pill${active ? " active" : ""}${sparkline ? " with-spark" : ""}`}
       onClick={onClick}
     >
-      {label}
+      {sparkline && (
+        <Sparkline values={sparkline} width={40} height={14} />
+      )}
+      <span>{label}</span>
     </button>
   );
+}
+
+/** Aggregate sparklines per queue from task data. */
+function computeQueueSparklines(
+  tasks: TaskSummary[],
+  queues: string[]
+): Record<string, number[]> {
+  const result: Record<string, number[]> = {};
+  for (const q of queues) {
+    const matching = tasks.filter((t) =>
+      t.top_queues.some((tq) => tq.queue === q)
+    );
+    if (matching.length === 0) continue;
+    const len = matching[0]?.sparkline.length || 60;
+    const agg = new Array(len).fill(0);
+    for (const t of matching) {
+      for (let i = 0; i < Math.min(t.sparkline.length, len); i++) {
+        agg[i] += t.sparkline[i];
+      }
+    }
+    result[q] = agg;
+  }
+  return result;
 }

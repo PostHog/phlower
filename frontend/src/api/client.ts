@@ -68,6 +68,13 @@ export interface HealthStatus {
   queues: string[];
 }
 
+export interface Meta {
+  queues: string[];
+  worker_groups: string[];
+  workers_seen: number;
+  last_inspect_at: number;
+}
+
 // -- endpoints ------------------------------------------------------------
 
 export const api = {
@@ -88,4 +95,5 @@ export const api = {
     return fetchJSON<InvocationRecord[]>(`/api/search/invocations?${qs}`);
   },
   health: () => fetchJSON<HealthStatus>("/healthz"),
+  meta: () => fetchJSON<Meta>("/api/meta"),
 };

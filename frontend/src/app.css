@@ -219,7 +219,16 @@ h3 {
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
+.filter-pill.with-spark {
+  padding: 4px 10px 4px 6px;
+}
+.filter-pill.with-spark svg { flex-shrink: 0; }
+.filter-pill.active svg polyline { stroke: rgba(255,255,255,0.7); }
+.filter-pill.active svg polyline:first-child { fill: rgba(255,255,255,0.15); }
 .filter-pill:hover {
   background: var(--bg-hover);
   border-color: #c0c0c0;

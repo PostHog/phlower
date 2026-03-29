@@ -312,6 +312,8 @@ class Store:
         *,
         task_name: str | None = None,
         worker: str | None = None,
+        worker_group: str | None = None,
+        queue: str | None = None,
     ) -> None:
         with self._lock:
             name = self._resolve_name(task_id, task_name)
@@ -323,6 +325,9 @@ class Store:
             rec.state = TaskState.STARTED
             rec.started_at = ts
             rec.worker = worker
+            rec.worker_group = worker_group
+            if queue and not rec.queue:
+                rec.queue = queue
             rec.transitions.append((TaskState.STARTED, ts))
             self._dirty_tasks.add(name)
 

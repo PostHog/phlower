@@ -6,5 +6,6 @@ build/
 .venv/
 .env
 node_modules/
+.claude/
 frontend_dist/
 src/phlower/frontend_dist/

@@ -11,11 +11,13 @@ router = APIRouter()
 async def meta(request: Request) -> dict:
     """Worker groups, queues, and other metadata from celery inspect."""
     consumer = request.app.state.consumer
+    store = request.app.state.store
     return {
         "queues": consumer.registry.all_queues(),
         "worker_groups": consumer.registry.all_groups(),
         "workers_seen": consumer.registry.worker_count(),
         "last_inspect_at": consumer.registry.last_inspect_at,
+        "pickup_latency_p95": store.pickup_latency_by_queue(),
     }
 
 

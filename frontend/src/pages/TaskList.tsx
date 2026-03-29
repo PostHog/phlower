@@ -68,6 +68,7 @@ export function TaskList() {
                   active={queueFilter === q}
                   onClick={() => setQueueFilter(q)}
                   sparkline={queueSparklines[q]}
+                  waitMs={meta.pickup_latency_p95?.[q]}
                 />
               ))}
             </div>
@@ -172,21 +173,33 @@ function FilterPill({
   active,
   onClick,
   sparkline,
+  waitMs,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   sparkline?: number[];
+  waitMs?: number | null;
 }) {
+  const waitClass =
+    waitMs != null && waitMs > 5000
+      ? "pill-wait-red"
+      : waitMs != null && waitMs > 1000
+        ? "pill-wait-yellow"
+        : "";
+
   return (
     <button
-      className={`filter-pill${active ? " active" : ""}${sparkline ? " with-spark" : ""}`}
+      className={`filter-pill${active ? " active" : ""}${sparkline ? " with-spark" : ""} ${waitClass}`}
       onClick={onClick}
     >
       {sparkline && (
         <Sparkline values={sparkline} width={40} height={14} />
       )}
       <span>{label}</span>
+      {waitMs != null && (
+        <span className="pill-wait">{fmtMs(waitMs)}</span>
+      )}
     </button>
   );
 }

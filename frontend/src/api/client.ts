@@ -73,6 +73,7 @@ export interface Meta {
   worker_groups: string[];
   workers_seen: number;
   last_inspect_at: number;
+  pickup_latency_p95: Record<string, number | null>;
 }
 
 // -- endpoints ------------------------------------------------------------

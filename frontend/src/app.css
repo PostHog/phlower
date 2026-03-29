@@ -239,6 +239,16 @@ h3 {
 .filter-pill.with-spark svg { flex-shrink: 0; }
 .filter-pill.active svg polyline { stroke: rgba(255,255,255,0.7); }
 .filter-pill.active svg polyline:first-child { fill: rgba(255,255,255,0.15); }
+
+.pill-wait {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--green);
+  font-weight: 600;
+}
+.pill-wait-yellow .pill-wait { color: var(--yellow); }
+.pill-wait-red .pill-wait { color: var(--red); }
+.filter-pill.active .pill-wait { color: rgba(255,255,255,0.8); }
 .filter-pill:hover {
   background: var(--bg-hover);
   border-color: #c0c0c0;

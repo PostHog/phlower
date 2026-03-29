@@ -202,6 +202,11 @@ class Store:
         # rolling event counter for tasks/sec display
         self._event_timestamps: deque[float] = deque()
 
+        # pickup latency (received→started) per queue, rolling buffer
+        self._pickup_latencies: dict[str, deque[float]] = defaultdict(
+            lambda: deque(maxlen=500)
+        )
+
     # -- internal helpers (call with lock held) ---------------------------
 
     def _should_track(self, task_name: str) -> bool:
@@ -333,6 +338,11 @@ class Store:
             if queue and not rec.queue:
                 rec.queue = queue
             rec.transitions.append((TaskState.STARTED, ts))
+            # Track pickup latency (time spent waiting in queue)
+            if rec.received_at is not None and not rec.transitions[0][0] == TaskState.STARTED:
+                wait_ms = (ts - rec.received_at) * 1000
+                q = rec.queue or "_global"
+                self._pickup_latencies[q].append(wait_ms)
             self._dirty_tasks.add(name)
 
     def process_succeeded(
@@ -490,6 +500,17 @@ class Store:
             self._event_timestamps.popleft()
         count = len(self._event_timestamps)
         return count / window if count else 0.0
+
+    def pickup_latency_by_queue(self) -> dict[str, float | None]:
+        """p95 pickup latency (ms) per queue from recent data."""
+        with self._lock:
+            result: dict[str, float | None] = {}
+            for q, latencies in self._pickup_latencies.items():
+                if q == "_global":
+                    continue
+                sr = sorted(latencies) if latencies else []
+                result[q] = percentile(sr, 95)
+            return result
 
     # -- read methods (called from async handlers) ------------------------
 

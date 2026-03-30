@@ -57,11 +57,10 @@ All via environment variables:
 |----------|---------|-------------|
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker to connect to |
 | `PORT` | `8100` | HTTP port |
-| `RETENTION_HOURS` | `24` | How long to keep data |
+| `RETENTION_HOURS` | `48` | How long to keep invocation records |
+| `AGGREGATE_RETENTION_HOURS` | `168` | How long to keep per-minute aggregates (7 days) |
 | `MAX_GLOBAL_INVOCATIONS` | `100000` | Total invocation records cap |
 | `MAX_INVOCATIONS_PER_TASK` | `10000` | Per-task invocation cap |
-| `SUCCESS_SAMPLE_RATE` | `0.1` | Fraction of successes to store (failures/retries always stored) |
-| `TASK_WATCHLIST` | | Comma-separated task names to always store fully |
 | `TASK_ALLOWLIST_REGEX` | `.*` | Only track tasks matching this pattern |
 | `SSE_THROTTLE_SECONDS` | `0.3` | How often to push SSE updates |
 

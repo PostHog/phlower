@@ -5,10 +5,31 @@ from __future__ import annotations
 import threading
 import time
 from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
 from itertools import islice
+from typing import TYPE_CHECKING
 
 from .config import Config
 from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary
+
+if TYPE_CHECKING:
+    from .sqlite_store import SQLiteStore
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedRecord:
+    """Lightweight snapshot for SQLite persistence — no args/kwargs/traceback."""
+
+    task_id: str
+    task_name: str
+    state: str
+    received_at: float | None
+    started_at: float | None
+    finished_at: float | None
+    runtime_ms: float | None
+    worker: str | None
+    queue: str | None
+    exception_type: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +207,9 @@ class Store:
     """Thread-safe in-memory store shared between the Celery consumer thread
     and the async FastAPI request handlers."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, sqlite_store: SQLiteStore | None = None) -> None:
         self.config = config
+        self.sqlite_store = sqlite_store
         self._lock = threading.Lock()
 
         # task_name → aggregate
@@ -207,6 +229,9 @@ class Store:
         # rolling event counter for tasks/sec display
         self._event_timestamps: deque[float] = deque()
 
+        # SQLite write-behind buffer (CompletedRecords, snapshotted at completion)
+        self._sqlite_pending: list[CompletedRecord] = []
+
         # pickup latency (received→started) per queue, rolling buffer
         self._pickup_latencies: dict[str, deque[float]] = defaultdict(
             lambda: deque(maxlen=500)
@@ -216,6 +241,21 @@ class Store:
 
     def _should_track(self, task_name: str) -> bool:
         return bool(self.config.task_allowlist_regex.match(task_name))
+
+    @staticmethod
+    def _snapshot(rec: InvocationRecord) -> CompletedRecord:
+        return CompletedRecord(
+            task_id=rec.task_id,
+            task_name=rec.task_name,
+            state=rec.state.value,
+            received_at=rec.received_at,
+            started_at=rec.started_at,
+            finished_at=rec.finished_at,
+            runtime_ms=rec.runtime_ms,
+            worker=rec.worker,
+            queue=rec.queue,
+            exception_type=rec.exception_type,
+        )
 
 
     def _evict_global(self) -> None:
@@ -369,6 +409,7 @@ class Store:
             rec.transitions.append((TaskState.SUCCESS, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._sqlite_pending.append(self._snapshot(rec))
 
     def process_failed(
         self,
@@ -411,6 +452,7 @@ class Store:
             rec.transitions.append((TaskState.FAILURE, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._sqlite_pending.append(self._snapshot(rec))
 
     def process_retried(
         self,
@@ -440,6 +482,7 @@ class Store:
             rec.transitions.append((TaskState.RETRY, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._sqlite_pending.append(self._snapshot(rec))
 
     # -- periodic maintenance ---------------------------------------------
 
@@ -481,6 +524,13 @@ class Store:
             self._dirty_tasks = set()
             self._new_invocation_ids = []
             return tasks, invocations
+
+    def drain_completed_for_sqlite(self) -> list[CompletedRecord]:
+        """Pop pending completed records for SQLite flush."""
+        with self._lock:
+            records = self._sqlite_pending
+            self._sqlite_pending = []
+            return records
 
     def record_event(self) -> None:
         """Track an incoming event for rate computation."""
@@ -535,7 +585,12 @@ class Store:
 
     def get_invocation(self, task_id: str) -> InvocationRecord | None:
         with self._lock:
-            return self.invocations.get(task_id)
+            rec = self.invocations.get(task_id)
+        if rec is not None:
+            return rec
+        if self.sqlite_store is not None:
+            return self.sqlite_store.lookup_task_id(task_id)
+        return None
 
     def get_known_queues(self) -> list[str]:
         with self._lock:
@@ -568,7 +623,14 @@ class Store:
         with self._lock:
             if task_id:
                 rec = self.invocations.get(task_id)
-                return [rec] if rec else []
+                if rec:
+                    return [rec]
+                # Fall through to SQLite for historical lookup
+                if self.sqlite_store is not None:
+                    sqlite_rec = self.sqlite_store.lookup_task_id(task_id)
+                    if sqlite_rec:
+                        return [sqlite_rec]
+                return []
 
             # Iterate newest-first via _invocation_order (already time-ordered).
             # Early exit after offset+limit matches — avoids full scan + sort.

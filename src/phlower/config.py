@@ -57,3 +57,9 @@ class Config:
     sse_throttle_seconds: float = field(
         default_factory=lambda: float(os.environ.get("SSE_THROTTLE_SECONDS", "0.3"))
     )
+    sqlite_path: str | None = field(
+        default_factory=lambda: os.environ.get("SQLITE_PATH")
+    )
+    sqlite_recovery_hours: int = field(
+        default_factory=lambda: int(os.environ.get("SQLITE_RECOVERY_HOURS", "48"))
+    )

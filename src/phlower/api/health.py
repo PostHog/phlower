@@ -28,12 +28,14 @@ async def stats(request: Request) -> dict:
     started_at = request.app.state.started_at
     uptime = time.time() - started_at
     retention = store.config.retention_hours * 3600
+    sqlite_store = request.app.state.sqlite_store
     return {
         "events_per_sec": round(store.events_per_second(), 1),
         "tasks_tracked": len(store.tasks),
         "uptime_sec": round(uptime),
         "retention_sec": retention,
         "broker_connected": request.app.state.consumer.connected,
+        "sqlite_rows": sqlite_store.row_count() if sqlite_store else None,
     }
 
 
@@ -41,6 +43,7 @@ async def stats(request: Request) -> dict:
 async def healthz(request: Request) -> dict:
     store = request.app.state.store
     consumer = request.app.state.consumer
+    sqlite_store = request.app.state.sqlite_store
     return {
         "status": "ok",
         "broker_connected": consumer.connected,
@@ -48,6 +51,7 @@ async def healthz(request: Request) -> dict:
         "broker_reconnects": consumer.reconnect_count,
         "tasks_tracked": len(store.tasks),
         "invocations_stored": len(store.invocations),
+        "sqlite_rows": sqlite_store.row_count() if sqlite_store else None,
         "sse_clients": request.app.state.broadcaster.client_count,
         "queues": consumer.registry.all_queues(),
         "worker_groups": consumer.registry.all_groups(),

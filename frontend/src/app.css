@@ -397,6 +397,15 @@ h3 {
   background: #fafafa;
 }
 
+/* New row highlight — applied via React key change */
+.data-table tbody tr.row-new {
+  animation: rowFlash 1.5s ease-out;
+}
+@keyframes rowFlash {
+  0% { background: var(--blue-light); }
+  100% { background: transparent; }
+}
+
 .data-table.compact td { padding: 5px 12px; }
 .data-table.compact { font-size: 12px; }
 

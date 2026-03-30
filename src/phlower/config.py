@@ -17,7 +17,10 @@ class Config:
         )
     )
     retention_hours: int = field(
-        default_factory=lambda: int(os.environ.get("RETENTION_HOURS", "24"))
+        default_factory=lambda: int(os.environ.get("RETENTION_HOURS", "48"))
+    )
+    aggregate_retention_hours: int = field(
+        default_factory=lambda: int(os.environ.get("AGGREGATE_RETENTION_HOURS", "168"))
     )
     max_global_invocations: int = field(
         default_factory=lambda: int(os.environ.get("MAX_GLOBAL_INVOCATIONS", "100000"))
@@ -42,9 +45,6 @@ class Config:
     )
     max_kwargs_preview_chars: int = field(
         default_factory=lambda: int(os.environ.get("MAX_KWARGS_PREVIEW_CHARS", "1000"))
-    )
-    success_sample_rate: float = field(
-        default_factory=lambda: float(os.environ.get("SUCCESS_SAMPLE_RATE", "0.1"))
     )
     max_runtime_buffer: int = field(
         default_factory=lambda: int(

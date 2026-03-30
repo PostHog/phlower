@@ -438,17 +438,17 @@ class Store:
     # -- periodic maintenance ---------------------------------------------
 
     def evict_expired(self) -> None:
-        cutoff = int(time.time()) - self.config.retention_hours * 3600
-        cutoff_minute = cutoff // 60 * 60
+        now = int(time.time())
+        inv_cutoff = now - self.config.retention_hours * 3600
+        agg_cutoff = now - self.config.aggregate_retention_hours * 3600
+        agg_cutoff_minute = agg_cutoff // 60 * 60
 
         with self._lock:
+            # Aggregates: keep for longer (default 7 days)
             for agg in self.tasks.values():
-                agg.evict_old_buckets(cutoff_minute)
+                agg.evict_old_buckets(agg_cutoff_minute)
 
-            # _invocation_order is oldest-first — pop from front until
-            # we hit a non-expired record. O(evicted) instead of O(total).
-            # Per-task deque entries become stale but readers already
-            # tolerate missing IDs via `if tid in self.invocations`.
+            # Invocations: shorter retention (default 48h)
             while self._invocation_order:
                 task_id = self._invocation_order[0]
                 rec = self.invocations.get(task_id)
@@ -456,7 +456,7 @@ class Store:
                     self._invocation_order.popleft()
                     continue
                 ts = rec.finished_at or rec.started_at or rec.received_at
-                if ts is not None and ts < cutoff:
+                if ts is not None and ts < inv_cutoff:
                     self._invocation_order.popleft()
                     self.invocations.pop(task_id, None)
                 else:

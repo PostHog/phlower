@@ -218,8 +218,10 @@ export function TaskDetail() {
             </tr>
           </thead>
           <tbody>
-            {invocations.map((inv) => (
-              <tr key={inv.task_id}>
+            {invocations.map((inv) => {
+              const isNew = inv.received_at != null && (Date.now() / 1000 - inv.received_at) < 5;
+              return (
+              <tr key={inv.task_id} className={isNew ? "row-new" : ""}>
                 <td>
                   <Link to={`/invocations/${inv.task_id}`} className="mono small truncate-id" title={inv.task_id}>
                     {inv.task_id}
@@ -231,7 +233,8 @@ export function TaskDetail() {
                 <td className="small">{fmtTs(inv.received_at)}</td>
                 <td className="mono small txt-fail">{inv.exception_type || ""}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       ) : (

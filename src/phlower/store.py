@@ -342,10 +342,31 @@ class Store:
         with self._lock:
             if not self._should_track(task_name):
                 return
-            self._get_or_create_task(task_name)
+
+            # Check if this record was already filed under "unknown"
+            # with a terminal state (prefork event ordering issue)
+            old_rec = self.invocations.get(task_id)
+            was_unknown_terminal = (
+                old_rec is not None
+                and old_rec.task_name == "unknown"
+                and old_rec.state in (TaskState.SUCCESS, TaskState.FAILURE, TaskState.RETRY)
+            )
+
+            agg = self._get_or_create_task(task_name)
             rec = self._ensure_record(task_id, task_name)
             rec.received_at = ts
             rec.queue = queue
+
+            # Re-apply terminal event to the correct aggregate
+            if was_unknown_terminal:
+                agg.record_terminal_event(
+                    rec.state,
+                    rec.finished_at or ts,
+                    runtime_ms=rec.runtime_ms,
+                    worker=rec.worker,
+                    queue=rec.queue,
+                    exception_type=rec.exception_type,
+                )
             rec.args_preview = (
                 args[: self.config.max_args_preview_chars] if args else None
             )

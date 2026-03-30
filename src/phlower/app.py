@@ -58,28 +58,38 @@ async def _sse_push_loop(
     store: Store, broadcaster: SSEBroadcaster, config: Config
 ) -> None:
     """Push only changed task summaries + stats via SSE."""
+    stats_tick = 0
     while True:
         await asyncio.sleep(config.sse_throttle_seconds)
         dirty_tasks, new_ids = store.flush_dirty()
-        if not dirty_tasks and not new_ids:
+        stats_tick += 1
+
+        # Push stats every ~2s (every 7th tick at 300ms) or when there's activity
+        send_stats = dirty_tasks or stats_tick >= 7
+        if send_stats:
+            stats_tick = 0
+
+        if not dirty_tasks and not send_stats:
             continue
 
-        # Only send summaries for tasks that actually changed
-        changed = []
-        for name in dirty_tasks:
-            s = store.get_task_summary(name)
-            if s:
-                changed.append(_slim_summary(s))
-
         started_at = getattr(store, "_app_started_at", time.time())
-        stats = {
-            "events_per_sec": round(store.events_per_second(), 1),
-            "tasks_tracked": len(store.tasks),
-            "uptime_sec": round(time.time() - started_at),
-            "broker_connected": True,
-        }
+        payload: dict = {"changed": []}
 
-        broadcaster.broadcast("task_update", {"changed": changed, "stats": stats})
+        if dirty_tasks:
+            for name in dirty_tasks:
+                s = store.get_task_summary(name)
+                if s:
+                    payload["changed"].append(_slim_summary(s))
+
+        if send_stats:
+            payload["stats"] = {
+                "events_per_sec": round(store.events_per_second(), 1),
+                "tasks_tracked": len(store.tasks),
+                "uptime_sec": round(time.time() - started_at),
+                "broker_connected": True,
+            }
+
+        broadcaster.broadcast("task_update", payload)
 
         if new_ids:
             broadcaster.broadcast("invocation_update", {"ids": new_ids[-20:]})

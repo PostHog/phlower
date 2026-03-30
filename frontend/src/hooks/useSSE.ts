@@ -41,11 +41,8 @@ export function useSSE() {
               return [...updated.values()];
             });
 
-            // Latency charts change per-minute — invalidate so they
-            // refetch on next render (but not eagerly for inactive queries)
-            queryClient.invalidateQueries({
-              predicate: (q) => q.queryKey[0] === "tasks" && q.queryKey[2] === "latency",
-            });
+            // Latency charts: per-minute data, refreshed via refetchInterval
+            // on the detail page (30s). No SSE invalidation needed.
           }
 
           // Stats — write directly

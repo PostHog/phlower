@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import threading
 import time
 from collections import Counter, defaultdict, deque
@@ -212,15 +211,6 @@ class Store:
     def _should_track(self, task_name: str) -> bool:
         return bool(self.config.task_allowlist_regex.match(task_name))
 
-    def _should_store_invocation(self, record: InvocationRecord) -> bool:
-        if record.state in (TaskState.FAILURE, TaskState.RETRY):
-            return True
-        if record.task_name in self.config.task_watchlist:
-            return True
-        if record.state == TaskState.SUCCESS:
-            return random.random() < self.config.success_sample_rate
-        # RECEIVED / STARTED are kept until terminal state decides
-        return True
 
     def _evict_global(self) -> None:
         while len(self.invocations) > self.config.max_global_invocations:
@@ -371,12 +361,7 @@ class Store:
             rec.finished_at = ts
             rec.runtime_ms = runtime_ms
             rec.transitions.append((TaskState.SUCCESS, ts))
-
-            if not self._should_store_invocation(rec):
-                self.invocations.pop(task_id, None)
-            else:
-                self._new_invocation_ids.append(task_id)
-
+            self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
 
     def process_failed(

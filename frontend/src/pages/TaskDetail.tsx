@@ -48,6 +48,7 @@ export function TaskDetail() {
   const { data: invocations = [] } = useQuery({
     queryKey: ["tasks", name, "invocations"],
     queryFn: () => api.taskInvocations(name),
+    staleTime: 2000,
   });
 
   if (!summary) return null;

@@ -49,13 +49,19 @@ async def _eviction_loop(store: Store, config: Config) -> None:
 
 async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
     """Batch flush completed invocations to SQLite every 1.5 seconds."""
-    while True:
-        await asyncio.sleep(1.5)
-        records = store.drain_completed_for_sqlite()
-        if records:
-            loop = asyncio.get_event_loop()
-            count = await loop.run_in_executor(None, sqlite_store.flush_batch, records)
-            logger.debug("SQLite flush: %d records", count)
+    logger.info("SQLite flush loop started")
+    try:
+        while True:
+            await asyncio.sleep(1.5)
+            records = store.drain_completed_for_sqlite()
+            if records:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, sqlite_store.flush_batch, records)
+                logger.info("SQLite flush: %d records", len(records))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("SQLite flush loop crashed")
 
 
 async def _sqlite_purge_loop(sqlite_store, retention_hours: int) -> None:

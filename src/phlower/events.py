@@ -48,24 +48,15 @@ class CeleryEventConsumer:
 
     def _run(self) -> None:
         app = Celery(broker=self.config.broker_url)
-        was_connected = False
         last_inspect = 0.0
 
         while not self._stop.is_set():
             try:
                 with app.connection() as conn:
-                    if not was_connected:
-                        logger.info("Connected to broker")
-                        was_connected = True
+                    logger.info("Connected to broker")
                     self.connected = True
                     self.last_error = None
                     self.reconnect_count = 0
-
-                    # Run inspect on connect and periodically
-                    now = time.time()
-                    if now - last_inspect > INSPECT_INTERVAL:
-                        self.registry.update(app)
-                        last_inspect = now
 
                     recv = app.events.Receiver(
                         conn,
@@ -76,27 +67,34 @@ class CeleryEventConsumer:
                             "task-failed": self._on_failed,
                             "task-retried": self._on_retried,
                         },
-                        # Only subscribe to task.* events — excludes worker
-                        # heartbeats which can burst and overflow Redis
-                        # pub/sub output buffers (client-output-buffer-limit).
-                        routing_key="task.#",
+                        # Redis uses fanout — routing_key filtering doesn't
+                        # work. Handler-level filtering handles it: only
+                        # task-* handlers are registered, worker-* events
+                        # are silently dropped by the Receiver.
                     )
-                    recv.capture(limit=None, timeout=1.0, wakeup=True)
+
+                    # Stay in this connection until it breaks.
+                    # capture() with timeout=1.0 returns after 1s of idle,
+                    # but does NOT close the connection — we just call it
+                    # again in the inner loop.
+                    while not self._stop.is_set():
+                        recv.capture(limit=None, timeout=1.0, wakeup=True)
+
+                        # Periodic inspect (reuse the open connection)
+                        now = time.time()
+                        if now - last_inspect > INSPECT_INTERVAL:
+                            try:
+                                self.registry.update(app)
+                            except Exception:
+                                pass
+                            last_inspect = now
+
             except (socket.timeout, TimeoutError, Empty):
-                # Normal timeout — check if inspect is due, then loop back
-                now = time.time()
-                if now - last_inspect > INSPECT_INTERVAL:
-                    try:
-                        self.registry.update(app)
-                        last_inspect = now
-                    except Exception:
-                        pass
                 continue
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)
                 self.reconnect_count += 1
-                was_connected = False
                 if self._stop.is_set():
                     break
                 delay = min(60, 2 ** min(self.reconnect_count, 6))
@@ -109,7 +107,6 @@ class CeleryEventConsumer:
     # -- queue enrichment -------------------------------------------------
 
     def _resolve_queue(self, event: dict) -> str | None:
-        """Best-effort queue: event field → worker inspect data → None."""
         queue = event.get("queue") or event.get("routing_key")
         if queue:
             return queue
@@ -128,13 +125,14 @@ class CeleryEventConsumer:
     # -- handlers ---------------------------------------------------------
 
     def _on_received(self, event: dict) -> None:
+        queue = event.get("queue") or event.get("routing_key")
         self.store.process_received(
             task_id=event["uuid"],
             task_name=event.get("name", "unknown"),
             ts=event.get("timestamp") or time.time(),
             args=event.get("args"),
             kwargs=event.get("kwargs"),
-            queue=self._resolve_queue(event),
+            queue=queue,
         )
 
     def _on_started(self, event: dict) -> None:

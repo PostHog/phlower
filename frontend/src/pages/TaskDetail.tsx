@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { type ColumnDef } from "@tanstack/react-table";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -14,9 +15,10 @@ import {
 } from "chart.js";
 import "chartjs-adapter-date-fns";
 import { Line, Bar } from "react-chartjs-2";
-import { api } from "../api/client";
+import { api, type InvocationRecord } from "../api/client";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Badge } from "../components/Badge";
+import { DataTable } from "../components/DataTable";
 import { fmtMs, fmtRate, fmtTs, fmtNum, fmtPerMin } from "../util";
 
 ChartJS.register(
@@ -30,6 +32,51 @@ ChartJS.register(
   Legend,
   Filler
 );
+
+const invocationColumns: ColumnDef<InvocationRecord, unknown>[] = [
+  {
+    accessorKey: "task_id",
+    header: "Task ID",
+    size: 240,
+    cell: ({ row }) => (
+      <Link to={`/invocations/${row.original.task_id}`} className="mono small truncate-id" title={row.original.task_id}>
+        {row.original.task_id}
+      </Link>
+    ),
+  },
+  {
+    accessorKey: "state",
+    header: "State",
+    size: 100,
+    cell: ({ row }) => <Badge state={row.original.state} small />,
+  },
+  {
+    accessorKey: "worker",
+    header: "Worker",
+    meta: { className: "mono small" },
+    cell: ({ row }) => row.original.worker || "\u2014",
+  },
+  {
+    accessorKey: "runtime_ms",
+    header: "Runtime",
+    meta: { className: "r num" },
+    size: 100,
+    cell: ({ row }) => fmtMs(row.original.runtime_ms),
+  },
+  {
+    accessorKey: "received_at",
+    header: "Received",
+    meta: { className: "small" },
+    size: 100,
+    cell: ({ row }) => fmtTs(row.original.received_at),
+  },
+  {
+    accessorKey: "exception_type",
+    header: "Error",
+    meta: { className: "mono small txt-fail" },
+    cell: ({ row }) => row.original.exception_type || "",
+  },
+];
 
 export function TaskDetail() {
   const { taskName } = useParams<{ taskName: string }>();
@@ -204,40 +251,21 @@ export function TaskDetail() {
         </div>
       </div>
 
-      {/* Recent invocations */}
+      {/* Recent invocations — virtualized */}
       <h2>Recent invocations</h2>
       {invocations.length > 0 ? (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Task ID</th>
-              <th>State</th>
-              <th>Worker</th>
-              <th className="r">Runtime</th>
-              <th>Received</th>
-              <th>Error</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invocations.map((inv) => {
-              const isNew = inv.received_at != null && (Date.now() / 1000 - inv.received_at) < 5;
-              return (
-              <tr key={inv.task_id} className={isNew ? "row-new" : ""}>
-                <td>
-                  <Link to={`/invocations/${inv.task_id}`} className="mono small truncate-id" title={inv.task_id}>
-                    {inv.task_id}
-                  </Link>
-                </td>
-                <td><Badge state={inv.state} small /></td>
-                <td className="mono small">{inv.worker || "\u2014"}</td>
-                <td className="r num">{fmtMs(inv.runtime_ms)}</td>
-                <td className="small">{fmtTs(inv.received_at)}</td>
-                <td className="mono small txt-fail">{inv.exception_type || ""}</td>
-              </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataTable
+          data={invocations}
+          columns={invocationColumns}
+          virtualize
+          estimateSize={38}
+          maxHeight={500}
+          getRowClassName={(inv) =>
+            inv.received_at != null && Date.now() / 1000 - inv.received_at < 5
+              ? "row-new"
+              : ""
+          }
+        />
       ) : (
         <div className="empty-state"><p>No invocations recorded.</p></div>
       )}

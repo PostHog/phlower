@@ -380,6 +380,26 @@ h3 {
   border-bottom: var(--border);
   white-space: nowrap;
   letter-spacing: 0.02em;
+  user-select: none;
+}
+.data-table th[style*="cursor: pointer"]:hover {
+  color: var(--ink);
+}
+
+/* Virtualized table container */
+.virtual-table-container {
+  border: var(--border);
+  border-radius: var(--radius);
+  overflow: auto;
+}
+.virtual-table-container .data-table {
+  border: none;
+  border-radius: 0;
+}
+.virtual-table-container thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .data-table td {

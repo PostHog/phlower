@@ -94,6 +94,12 @@ class TaskAggregate:
         if exception_type:
             self.exceptions[exception_type] += 1
 
+    def thin_old_buckets(self, cutoff_minute_ts: int) -> None:
+        """Strip runtimes from buckets older than cutoff. Keeps counters."""
+        for ts, bucket in self.buckets.items():
+            if ts < cutoff_minute_ts and bucket.runtimes:
+                bucket.runtimes.clear()
+
     def evict_old_buckets(self, cutoff_minute_ts: int) -> None:
         stale = [ts for ts in self.buckets if ts < cutoff_minute_ts]
         for ts in stale:
@@ -443,9 +449,13 @@ class Store:
         agg_cutoff = now - self.config.aggregate_retention_hours * 3600
         agg_cutoff_minute = agg_cutoff // 60 * 60
 
+        thin_cutoff_minute = (inv_cutoff // 60) * 60
+
         with self._lock:
-            # Aggregates: keep for longer (default 7 days)
             for agg in self.tasks.values():
+                # Strip runtimes from buckets older than 48h (saves ~4KB/bucket)
+                agg.thin_old_buckets(thin_cutoff_minute)
+                # Delete buckets older than 7 days entirely
                 agg.evict_old_buckets(agg_cutoff_minute)
 
             # Invocations: shorter retention (default 48h)

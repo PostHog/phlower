@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class CompletedRecord:
-    """Lightweight snapshot for SQLite persistence — no args/kwargs/traceback."""
+    """Snapshot for SQLite persistence — includes heavy fields for recent detail."""
 
     task_id: str
     task_name: str
@@ -30,6 +30,9 @@ class CompletedRecord:
     worker: str | None
     queue: str | None
     exception_type: str | None
+    args_preview: str | None
+    kwargs_preview: str | None
+    traceback_snippet: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +258,9 @@ class Store:
             worker=rec.worker,
             queue=rec.queue,
             exception_type=rec.exception_type,
+            args_preview=rec.args_preview,
+            kwargs_preview=rec.kwargs_preview,
+            traceback_snippet=rec.traceback_snippet,
         )
 
 
@@ -576,12 +582,29 @@ class Store:
             return agg.latency_series() if agg else None
 
     def get_task_invocations(
-        self, task_name: str, *, limit: int = 50, offset: int = 0
+        self,
+        task_name: str,
+        *,
+        limit: int = 100,
+        before_ts: float | None = None,
+        after_ts: float | None = None,
     ) -> list[InvocationRecord]:
         with self._lock:
             dq = self.invocations_by_task.get(task_name, deque())
-            ids = list(islice(reversed(dq), offset, offset + limit))
-            return [self.invocations[tid] for tid in ids if tid in self.invocations]
+            results: list[InvocationRecord] = []
+            for tid in reversed(dq):
+                rec = self.invocations.get(tid)
+                if rec is None:
+                    continue
+                ts = rec.received_at or rec.started_at or 0.0
+                if before_ts is not None and ts >= before_ts:
+                    continue
+                if after_ts is not None and ts <= after_ts:
+                    break  # older than cursor, stop (list is newest-first)
+                results.append(rec)
+                if len(results) >= limit:
+                    break
+            return results
 
     def get_invocation(self, task_id: str) -> InvocationRecord | None:
         with self._lock:

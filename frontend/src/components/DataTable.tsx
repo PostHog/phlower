@@ -17,6 +17,7 @@ interface Props<T> {
   virtualize?: boolean;
   estimateSize?: number;
   maxHeight?: number;
+  initialSorting?: SortingState;
 }
 
 export function DataTable<T>({
@@ -26,8 +27,9 @@ export function DataTable<T>({
   virtualize = false,
   estimateSize = 36,
   maxHeight = 600,
+  initialSorting = [],
 }: Props<T>) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>(initialSorting);
 
   const table = useReactTable({
     data,
@@ -96,7 +98,7 @@ export function DataTable<T>({
   );
 }
 
-/** Virtualized table body — only renders visible rows */
+/** Virtualized table body — padding-based, normal table layout */
 function VirtualizedBody<T>({
   table,
   rows,
@@ -119,13 +121,19 @@ function VirtualizedBody<T>({
     overscan: 10,
   });
 
+  const items = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+  const paddingTop = items.length > 0 ? items[0].start : 0;
+  const paddingBottom = items.length > 0 ? totalSize - items[items.length - 1].end : 0;
+  const colCount = table.getVisibleLeafColumns().length;
+
   return (
     <div
       ref={parentRef}
       className="virtual-table-container"
       style={{ maxHeight, overflow: "auto" }}
     >
-      <table className="data-table" style={{ tableLayout: "fixed" }}>
+      <table className="data-table">
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
@@ -134,10 +142,7 @@ function VirtualizedBody<T>({
                   key={header.id}
                   className={header.column.columnDef.meta?.className ?? ""}
                   onClick={header.column.getToggleSortingHandler()}
-                  style={{
-                    cursor: header.column.getCanSort() ? "pointer" : "default",
-                    width: header.column.columnDef.size,
-                  }}
+                  style={{ cursor: header.column.getCanSort() ? "pointer" : "default" }}
                 >
                   {flexRender(header.column.columnDef.header, header.getContext())}
                   {header.column.getIsSorted() === "asc"
@@ -150,31 +155,21 @@ function VirtualizedBody<T>({
             </tr>
           ))}
         </thead>
-        <tbody
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: "relative",
-          }}
-        >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
+        <tbody>
+          {paddingTop > 0 && (
+            <tr><td colSpan={colCount} style={{ height: paddingTop, padding: 0, border: "none" }} /></tr>
+          )}
+          {items.map((virtualRow) => {
             const row = rows[virtualRow.index];
             return (
               <tr
                 key={row.id}
                 className={getRowClassName?.(row.original) ?? ""}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  width: "100%",
-                  display: "table-row",
-                }}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td
                     key={cell.id}
                     className={cell.column.columnDef.meta?.className ?? ""}
-                    style={{ width: cell.column.columnDef.size }}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
@@ -182,6 +177,9 @@ function VirtualizedBody<T>({
               </tr>
             );
           })}
+          {paddingBottom > 0 && (
+            <tr><td colSpan={colCount} style={{ height: paddingBottom, padding: 0, border: "none" }} /></tr>
+          )}
         </tbody>
       </table>
     </div>

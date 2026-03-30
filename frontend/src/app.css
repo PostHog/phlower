@@ -399,6 +399,34 @@ h3 {
 .virtual-table-container thead {
   position: sticky;
   top: 0;
+}
+
+/* partial record indicator */
+.partial-badge { background: var(--yellow-bg); color: var(--yellow); }
+.partial-note {
+  color: var(--ink-3);
+  font-size: 12px;
+  background: var(--bg);
+  border-style: dashed;
+}
+.partial-note p { margin: 0; }
+
+.load-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin-top: -1px;
+  border: var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-raised);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.load-more:hover { background: var(--bg-hover); color: var(--ink); }
+.load-more:disabled { color: var(--ink-muted); cursor: default;
   z-index: 1;
 }
 

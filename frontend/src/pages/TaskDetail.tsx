@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import { useCallback, useEffect } from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   Chart as ChartJS,
@@ -85,18 +86,74 @@ export function TaskDetail() {
   const { data: summary } = useQuery({
     queryKey: ["tasks", name, "summary"],
     queryFn: () => api.taskSummary(name),
+    refetchInterval: 5000, // SSE updates this cache too, but fallback poll for safety
   });
 
   const { data: latency = [] } = useQuery({
     queryKey: ["tasks", name, "latency"],
     queryFn: () => api.taskLatency(name),
+    refetchInterval: 30000, // per-minute data, no need to refresh faster
   });
 
-  const { data: invocations = [] } = useQuery({
+  // Bidirectional infinite query:
+  // - fetchNextPage: load older records (scroll down / "Load older" button)
+  // - fetchPreviousPage: load newer records (SSE invocation_update signal)
+  const {
+    data: invPages,
+    fetchNextPage,
+    fetchPreviousPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["tasks", name, "invocations"],
-    queryFn: () => api.taskInvocations(name),
-    staleTime: 2000,
+    queryFn: ({ pageParam }) => {
+      if (!pageParam) {
+        // Initial fetch — no cursor
+        return api.taskInvocations(name, { limit: 100 });
+      }
+      if (pageParam.direction === "older") {
+        return api.taskInvocations(name, { limit: 100, before_ts: pageParam.ts });
+      }
+      // "newer" — prepend
+      return api.taskInvocations(name, { limit: 100, after_ts: pageParam.ts });
+    },
+    initialPageParam: undefined as { direction: "older" | "newer"; ts: number } | undefined,
+    getNextPageParam: (lastPage) => {
+      if (lastPage.length === 0) return undefined;
+      const oldest = lastPage[lastPage.length - 1];
+      return oldest.received_at ? { direction: "older" as const, ts: oldest.received_at } : undefined;
+    },
+    getPreviousPageParam: (firstPage) => {
+      if (firstPage.length === 0) return undefined;
+      return firstPage[0].received_at ? { direction: "newer" as const, ts: firstPage[0].received_at } : undefined;
+    },
+    maxPages: 20,
   });
+
+  // Flatten all pages, deduplicate by task_id
+  const allInvocations = (invPages?.pages ?? []).flat();
+  const seen = new Set<string>();
+  const invocations = allInvocations.filter((inv) => {
+    if (seen.has(inv.task_id)) return false;
+    seen.add(inv.task_id);
+    return true;
+  });
+
+  // SSE invocation_update triggers fetchPreviousPage to prepend new records
+  useEffect(() => {
+    const handler = () => {
+      if (invocations.length > 0) {
+        fetchPreviousPage();
+      }
+    };
+    // Listen for custom event dispatched by SSE hook
+    window.addEventListener("phlower:invocation_update", handler);
+    return () => window.removeEventListener("phlower:invocation_update", handler);
+  }, [fetchPreviousPage, invocations.length]);
+
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   if (!summary) return null;
 
@@ -254,18 +311,26 @@ export function TaskDetail() {
       {/* Recent invocations — virtualized */}
       <h2>Recent invocations</h2>
       {invocations.length > 0 ? (
-        <DataTable
-          data={invocations}
-          columns={invocationColumns}
-          virtualize
-          estimateSize={38}
-          maxHeight={500}
-          getRowClassName={(inv) =>
-            inv.received_at != null && Date.now() / 1000 - inv.received_at < 5
-              ? "row-new"
-              : ""
-          }
-        />
+        <>
+          <DataTable
+            data={invocations}
+            columns={invocationColumns}
+            virtualize
+            estimateSize={38}
+            maxHeight={500}
+            initialSorting={[{ id: "received_at", desc: true }]}
+            getRowClassName={(inv) =>
+              inv.received_at != null && Date.now() / 1000 - inv.received_at < 5
+                ? "row-new"
+                : ""
+            }
+          />
+          {hasNextPage && (
+            <button className="load-more" onClick={loadMore} disabled={isFetchingNextPage}>
+              {isFetchingNextPage ? "Loading..." : "Load older"}
+            </button>
+          )}
+        </>
       ) : (
         <div className="empty-state"><p>No invocations recorded.</p></div>
       )}

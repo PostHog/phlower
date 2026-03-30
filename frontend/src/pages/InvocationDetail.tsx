@@ -1,8 +1,14 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, type InvocationRecord } from "../api/client";
 import { Badge } from "../components/Badge";
 import { fmtMs, fmtTsFull } from "../util";
+
+/** A record is "partial" if it has a terminal state but no detail fields — thinned by SQLite. */
+function isPartial(inv: InvocationRecord): boolean {
+  const terminal = ["SUCCESS", "FAILURE", "RETRY"].includes(inv.state);
+  return terminal && !inv.args_preview && !inv.kwargs_preview && !inv.traceback_snippet && inv.transitions.length === 0;
+}
 
 export function InvocationDetail() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -42,6 +48,7 @@ export function InvocationDetail() {
         </Link>
         <h1 className="mono">{inv.task_id}</h1>
         <Badge state={inv.state} />
+        {isPartial(inv) && <span className="badge partial-badge">partial</span>}
       </div>
 
       <div className="detail-grid">
@@ -91,6 +98,12 @@ export function InvocationDetail() {
                 <pre className="traceback">{inv.traceback_snippet}</pre>
               )}
             </div>
+          </div>
+        )}
+
+        {isPartial(inv) && (
+          <div className="detail-card wide partial-note">
+            <p>This is a partial record. Args, kwargs, and traceback were removed after {"\u2248"}8 hours to save storage. Metadata (timestamps, state, worker, queue) is retained for up to 7 days.</p>
           </div>
         )}
       </div>

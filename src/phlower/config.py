@@ -63,3 +63,6 @@ class Config:
     sqlite_recovery_hours: int = field(
         default_factory=lambda: int(os.environ.get("SQLITE_RECOVERY_HOURS", "48"))
     )
+    sqlite_detail_hours: int = field(
+        default_factory=lambda: int(os.environ.get("SQLITE_DETAIL_HOURS", "8"))
+    )

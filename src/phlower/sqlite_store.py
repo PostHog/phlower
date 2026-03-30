@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS invocations (
     runtime_ms  REAL,
     worker      TEXT,
     queue       TEXT,
-    exception_type TEXT
+    exception_type TEXT,
+    args_preview TEXT,
+    kwargs_preview TEXT,
+    traceback_snippet TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inv_finished ON invocations (finished_at);
 CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished_at);
@@ -31,8 +34,19 @@ CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished
 UPSERT_SQL = """
 INSERT OR REPLACE INTO invocations
     (task_id, task_name, state, received_at, started_at, finished_at,
-     runtime_ms, worker, queue, exception_type)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     runtime_ms, worker, queue, exception_type,
+     args_preview, kwargs_preview, traceback_snippet)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+THIN_SQL = """
+UPDATE invocations
+SET args_preview=NULL, kwargs_preview=NULL, traceback_snippet=NULL
+WHERE rowid IN (
+    SELECT rowid FROM invocations
+    WHERE finished_at < ? AND args_preview IS NOT NULL
+    LIMIT 10000
+)
 """
 
 
@@ -51,11 +65,23 @@ class SQLiteStore:
 
     def init_schema(self) -> None:
         self._conn.executescript(SCHEMA)
+        # Add columns if upgrading from older schema
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that may not exist in older databases."""
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(invocations)").fetchall()
+        }
+        for col in ("args_preview", "kwargs_preview", "traceback_snippet"):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE invocations ADD COLUMN {col} TEXT")
+        self._conn.commit()
 
     # -- writes -----------------------------------------------------------
 
     def flush_batch(self, records: list) -> int:
-        """INSERT OR REPLACE a batch of CompletedRecords. Returns count."""
         if not records:
             return 0
         self._conn.executemany(
@@ -72,12 +98,28 @@ class SQLiteStore:
                     r.worker,
                     r.queue,
                     r.exception_type,
+                    r.args_preview,
+                    r.kwargs_preview,
+                    r.traceback_snippet,
                 )
                 for r in records
             ],
         )
         self._conn.commit()
         return len(records)
+
+    def thin_details(self, cutoff_ts: float) -> int:
+        """NULL out heavy fields (args/kwargs/traceback) for old records.
+        Processes in 10K batches to avoid long write locks."""
+        total = 0
+        while True:
+            cur = self._conn.execute(THIN_SQL, (cutoff_ts,))
+            self._conn.commit()
+            affected = cur.rowcount
+            total += affected
+            if affected < 10000:
+                break
+        return total
 
     def purge_expired(self, cutoff_ts: float) -> int:
         cur = self._conn.execute(
@@ -97,7 +139,6 @@ class SQLiteStore:
         return self._row_to_record(row)
 
     def load_recovery_data(self, since_ts: float) -> Iterator[sqlite3.Row]:
-        """Yield rows for aggregate rebuild, ordered by task_name."""
         self._conn.row_factory = sqlite3.Row
         cur = self._conn.execute(
             "SELECT task_name, state, finished_at, runtime_ms, worker, queue, "
@@ -111,6 +152,14 @@ class SQLiteStore:
     def row_count(self) -> int:
         row = self._conn.execute("SELECT count(*) FROM invocations").fetchone()
         return row[0] if row else 0
+
+    def db_size_mb(self) -> float:
+        """Approximate DB file size in MB."""
+        row = self._conn.execute("PRAGMA page_count").fetchone()
+        pages = row[0] if row else 0
+        row = self._conn.execute("PRAGMA page_size").fetchone()
+        page_size = row[0] if row else 4096
+        return (pages * page_size) / (1024 * 1024)
 
     def close(self) -> None:
         self._conn.close()
@@ -129,4 +178,7 @@ class SQLiteStore:
             worker=row[7],
             queue=row[8],
             exception_type=row[9],
+            args_preview=row[10] if len(row) > 10 else None,
+            kwargs_preview=row[11] if len(row) > 11 else None,
+            traceback_snippet=row[12] if len(row) > 12 else None,
         )

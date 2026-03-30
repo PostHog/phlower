@@ -154,7 +154,12 @@ export function TaskList() {
       ) : null}
 
       {sorted.length > 0 ? (
-        <DataTable data={sorted} columns={columns} getRowClassName={getRowClassName} />
+        <DataTable
+          data={sorted}
+          columns={columns}
+          getRowClassName={getRowClassName}
+          initialSorting={[{ id: "task_name", desc: false }]}
+        />
       ) : (
         <div className="empty-state">
           <p>No tasks observed yet.</p>

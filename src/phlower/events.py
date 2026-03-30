@@ -74,11 +74,14 @@ class CeleryEventConsumer:
                     )
 
                     # Stay in this connection until it breaks.
-                    # capture() with timeout=1.0 returns after 1s of idle,
-                    # but does NOT close the connection — we just call it
-                    # again in the inner loop.
+                    # Timeout exceptions from capture() are normal (no events
+                    # in the last 1s) — catch them here to stay in the same
+                    # connection instead of reconnecting.
                     while not self._stop.is_set():
-                        recv.capture(limit=None, timeout=1.0, wakeup=True)
+                        try:
+                            recv.capture(limit=None, timeout=1.0, wakeup=True)
+                        except (socket.timeout, TimeoutError, Empty):
+                            pass  # normal idle timeout, stay connected
 
                         # Periodic inspect (reuse the open connection)
                         now = time.time()
@@ -88,9 +91,6 @@ class CeleryEventConsumer:
                             except Exception:
                                 pass
                             last_inspect = now
-
-            except (socket.timeout, TimeoutError, Empty):
-                continue
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)

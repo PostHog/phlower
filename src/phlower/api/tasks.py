@@ -41,11 +41,12 @@ async def task_latency(task_name: str, request: Request) -> list[dict]:
 async def task_invocations(
     task_name: str,
     request: Request,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = 100,
+    before_ts: float | None = None,
+    after_ts: float | None = None,
 ) -> list[dict]:
     records = request.app.state.store.get_task_invocations(
-        task_name, limit=limit, offset=offset
+        task_name, limit=limit, before_ts=before_ts, after_ts=after_ts,
     )
     return [_serialise_record(r) for r in records]
 

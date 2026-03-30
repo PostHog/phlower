@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { TaskSummary } from "../api/client";
 
 /**
- * Connects to the SSE stream and updates TanStack Query caches
- * directly with pushed data. No HTTP polling needed.
+ * SSE stream — pushes only changed task summaries + stats.
+ * Merges diffs into the TanStack Query cache. Full task list
+ * (with sparklines) is fetched once on page load.
  */
 export function useSSE() {
   const queryClient = useQueryClient();
@@ -18,35 +20,65 @@ export function useSSE() {
         try {
           const payload = JSON.parse(e.data);
 
-          // Write task list directly into cache — no refetch
-          if (payload.tasks) {
-            queryClient.setQueryData(["tasks"], payload.tasks);
+          // Merge changed summaries into the cached task list
+          if (payload.changed?.length) {
+            queryClient.setQueryData<TaskSummary[]>(["tasks"], (old) => {
+              if (!old) return old;
+              const updated = new Map(old.map((t) => [t.task_name, t]));
+              for (const diff of payload.changed) {
+                const existing = updated.get(diff.task_name);
+                if (existing) {
+                  updated.set(diff.task_name, { ...existing, ...diff });
+                } else {
+                  updated.set(diff.task_name, { ...diff, sparkline: [], top_exceptions: [], top_workers: [], top_queues: [] });
+                }
+                // Also update per-task summary cache (detail page)
+                queryClient.setQueryData(
+                  ["tasks", diff.task_name, "summary"],
+                  (old: TaskSummary | undefined) => old ? { ...old, ...diff } : undefined,
+                );
+              }
+              return [...updated.values()];
+            });
+
+            // Latency charts change per-minute — invalidate so they
+            // refetch on next render (but not eagerly for inactive queries)
+            queryClient.invalidateQueries({
+              predicate: (q) => q.queryKey[0] === "tasks" && q.queryKey[2] === "latency",
+            });
           }
 
-          // Write stats directly into cache — no polling
+          // Stats — write directly
           if (payload.stats) {
             queryClient.setQueryData(["stats"], payload.stats);
           }
         } catch {
-          // Fallback: invalidate so it refetches
+          // Fallback: invalidate to trigger refetch
           queryClient.invalidateQueries({ queryKey: ["tasks"], exact: true });
         }
       });
 
+      es.addEventListener("sparkline_update", (e) => {
+        try {
+          const { points } = JSON.parse(e.data) as { points: Record<string, number> };
+          queryClient.setQueryData<TaskSummary[]>(["tasks"], (old) => {
+            if (!old) return old;
+            return old.map((t) => {
+              const count = points[t.task_name];
+              if (count === undefined) return t;
+              // Shift sparkline left, append new point
+              const spark = [...t.sparkline.slice(1), count];
+              return { ...t, sparkline: spark };
+            });
+          });
+        } catch { /* ignore */ }
+      });
+
       es.addEventListener("invocation_update", () => {
-        // Invalidate invocation-related queries to trigger refetch
-        queryClient.invalidateQueries({
-          predicate: (query) => {
-            const key = query.queryKey;
-            return (
-              (key[0] === "tasks" &&
-                (key[2] === "invocations" ||
-                  key[2] === "summary" ||
-                  key[2] === "latency")) ||
-              key[0] === "search"
-            );
-          },
-        });
+        // Signal the detail page to fetchPreviousPage (prepend new records)
+        window.dispatchEvent(new Event("phlower:invocation_update"));
+        // Also invalidate search results
+        queryClient.invalidateQueries({ queryKey: ["search"] });
       });
 
       es.onerror = () => {
@@ -56,9 +88,6 @@ export function useSSE() {
     }
 
     connect();
-
-    return () => {
-      sourceRef.current?.close();
-    };
+    return () => { sourceRef.current?.close(); };
   }, [queryClient]);
 }

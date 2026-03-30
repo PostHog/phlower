@@ -37,33 +37,66 @@ def _serialise_summary(s) -> dict:
     return d
 
 
+def _slim_summary(s) -> dict:
+    """Lightweight summary for SSE — no sparkline, no top lists."""
+    return {
+        "task_name": s.task_name,
+        "total_count": s.total_count,
+        "success_count": s.success_count,
+        "failure_count": s.failure_count,
+        "retry_count": s.retry_count,
+        "active_count": s.active_count,
+        "failure_rate": s.failure_rate,
+        "p50_ms": s.p50_ms,
+        "p95_ms": s.p95_ms,
+        "p99_ms": s.p99_ms,
+        "rate_per_min": s.rate_per_min,
+    }
+
+
 async def _sse_push_loop(
     store: Store, broadcaster: SSEBroadcaster, config: Config
 ) -> None:
-    """Push full task list + stats via SSE every tick. No polling needed."""
+    """Push only changed task summaries + stats via SSE."""
     while True:
         await asyncio.sleep(config.sse_throttle_seconds)
         dirty_tasks, new_ids = store.flush_dirty()
         if not dirty_tasks and not new_ids:
             continue
 
-        # Full task list — the frontend replaces its cache directly
-        summaries = store.get_task_list()
-        tasks = [_serialise_summary(s) for s in summaries]
+        # Only send summaries for tasks that actually changed
+        changed = []
+        for name in dirty_tasks:
+            s = store.get_task_summary(name)
+            if s:
+                changed.append(_slim_summary(s))
 
-        # Stats for the nav ticker
         started_at = getattr(store, "_app_started_at", time.time())
         stats = {
             "events_per_sec": round(store.events_per_second(), 1),
             "tasks_tracked": len(store.tasks),
             "uptime_sec": round(time.time() - started_at),
-            "broker_connected": True,  # we're pushing, so we're connected
+            "broker_connected": True,
         }
 
-        broadcaster.broadcast("task_update", {"tasks": tasks, "stats": stats})
+        broadcaster.broadcast("task_update", {"changed": changed, "stats": stats})
 
         if new_ids:
             broadcaster.broadcast("invocation_update", {"ids": new_ids[-20:]})
+
+
+async def _sparkline_push_loop(store: Store, broadcaster: SSEBroadcaster) -> None:
+    """Push latest sparkline data points every 60s."""
+    while True:
+        await asyncio.sleep(60)
+        points: dict[str, int] = {}
+        now_minute = int(time.time()) // 60 * 60
+        with store._lock:
+            for name, agg in store.tasks.items():
+                bucket = agg.buckets.get(now_minute)
+                points[name] = bucket.count if bucket else 0
+        if points:
+            broadcaster.broadcast("sparkline_update", {"points": points})
 
 
 async def _eviction_loop(store: Store, config: Config) -> None:
@@ -92,15 +125,25 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         logger.exception("SQLite flush loop crashed")
 
 
-async def _sqlite_purge_loop(sqlite_store, retention_hours: int) -> None:
-    """Delete rows older than retention window, once per hour."""
+async def _sqlite_purge_loop(sqlite_store, config: Config) -> None:
+    """Thin detail fields after SQLITE_DETAIL_HOURS, delete after AGGREGATE_RETENTION_HOURS."""
     while True:
         await asyncio.sleep(3600)
-        cutoff = time.time() - retention_hours * 3600
         loop = asyncio.get_event_loop()
-        deleted = await loop.run_in_executor(None, sqlite_store.purge_expired, cutoff)
+
+        # Thin: NULL out args/kwargs/traceback for old records (10K batch)
+        thin_cutoff = time.time() - config.sqlite_detail_hours * 3600
+        thinned = await loop.run_in_executor(None, sqlite_store.thin_details, thin_cutoff)
+        if thinned:
+            logger.info("SQLite thin: stripped detail from %d records", thinned)
+
+        # Purge: delete rows older than retention window
+        purge_cutoff = time.time() - config.aggregate_retention_hours * 3600
+        deleted = await loop.run_in_executor(None, sqlite_store.purge_expired, purge_cutoff)
         if deleted:
             logger.info("SQLite purge: deleted %d expired rows", deleted)
+
+        logger.info("SQLite: %.1f MB, %d rows", sqlite_store.db_size_mb(), sqlite_store.row_count())
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +182,7 @@ async def lifespan(app: FastAPI):
 
     store._app_started_at = time.time()
     sse_task = asyncio.create_task(_sse_push_loop(store, broadcaster, config))
+    sparkline_task = asyncio.create_task(_sparkline_push_loop(store, broadcaster))
     evict_task = asyncio.create_task(_eviction_loop(store, config))
 
     # SQLite background tasks (only if enabled)
@@ -147,7 +191,7 @@ async def lifespan(app: FastAPI):
         sqlite_tasks.append(asyncio.create_task(_sqlite_flush_loop(store, sqlite_store)))
         sqlite_tasks.append(
             asyncio.create_task(
-                _sqlite_purge_loop(sqlite_store, config.aggregate_retention_hours)
+                _sqlite_purge_loop(sqlite_store, config)
             )
         )
 
@@ -179,6 +223,7 @@ async def lifespan(app: FastAPI):
     for t in sqlite_tasks:
         t.cancel()
     sse_task.cancel()
+    sparkline_task.cancel()
     evict_task.cancel()
     consumer.stop()
     logger.info("Phlower shut down")

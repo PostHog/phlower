@@ -84,10 +84,18 @@ export const api = {
     fetchJSON<TaskSummary>(`/api/tasks/${encodeURIComponent(name)}/summary`),
   taskLatency: (name: string) =>
     fetchJSON<LatencyPoint[]>(`/api/tasks/${encodeURIComponent(name)}/latency`),
-  taskInvocations: (name: string, limit = 50) =>
-    fetchJSON<InvocationRecord[]>(
-      `/api/tasks/${encodeURIComponent(name)}/invocations?limit=${limit}`
-    ),
+  taskInvocations: (
+    name: string,
+    opts?: { limit?: number; before_ts?: number; after_ts?: number }
+  ) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts?.limit ?? 100));
+    if (opts?.before_ts) params.set("before_ts", String(opts.before_ts));
+    if (opts?.after_ts) params.set("after_ts", String(opts.after_ts));
+    return fetchJSON<InvocationRecord[]>(
+      `/api/tasks/${encodeURIComponent(name)}/invocations?${params}`
+    );
+  },
   invocation: (id: string) => fetchJSON<InvocationRecord>(`/api/invocations/${id}`),
   search: (params: Record<string, string>) => {
     const qs = new URLSearchParams(

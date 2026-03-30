@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 /**
- * Connects to the SSE stream and invalidates TanStack Query caches
- * when the server pushes updates. Reconnects automatically.
+ * Connects to the SSE stream and updates TanStack Query caches
+ * directly with pushed data. No HTTP polling needed.
  */
 export function useSSE() {
   const queryClient = useQueryClient();
@@ -14,21 +14,35 @@ export function useSSE() {
       const es = new EventSource("/api/stream");
       sourceRef.current = es;
 
-      es.addEventListener("task_update", () => {
-        // Invalidate task list and summaries — NOT invocations
-        // (invocations change too fast and cause visual jumping)
-        queryClient.invalidateQueries({ queryKey: ["tasks"], exact: true });
-        queryClient.invalidateQueries({ queryKey: ["meta"] });
-        queryClient.invalidateQueries({ queryKey: ["stats"] });
+      es.addEventListener("task_update", (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+
+          // Write task list directly into cache — no refetch
+          if (payload.tasks) {
+            queryClient.setQueryData(["tasks"], payload.tasks);
+          }
+
+          // Write stats directly into cache — no polling
+          if (payload.stats) {
+            queryClient.setQueryData(["stats"], payload.stats);
+          }
+        } catch {
+          // Fallback: invalidate so it refetches
+          queryClient.invalidateQueries({ queryKey: ["tasks"], exact: true });
+        }
       });
 
       es.addEventListener("invocation_update", () => {
-        // Only refresh invocation-related queries on terminal events
+        // Invalidate invocation-related queries to trigger refetch
         queryClient.invalidateQueries({
           predicate: (query) => {
             const key = query.queryKey;
             return (
-              (key[0] === "tasks" && (key[2] === "invocations" || key[2] === "summary" || key[2] === "latency")) ||
+              (key[0] === "tasks" &&
+                (key[2] === "invocations" ||
+                  key[2] === "summary" ||
+                  key[2] === "latency")) ||
               key[0] === "search"
             );
           },

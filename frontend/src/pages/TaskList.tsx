@@ -11,7 +11,7 @@ export function TaskList() {
   const { data: tasks = [] } = useQuery({
     queryKey: ["tasks"],
     queryFn: api.tasks,
-    refetchInterval: 2000,
+    // No polling — SSE task_update events trigger invalidation
   });
 
   const { data: meta } = useQuery({

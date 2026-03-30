@@ -27,13 +27,41 @@ FRONTEND_DIR = Path(__file__).parent / "frontend_dist"
 # ---------------------------------------------------------------------------
 
 
-async def _sse_push_loop(store: Store, broadcaster: SSEBroadcaster, config: Config) -> None:
-    """Throttled SSE broadcaster — flushes dirty state every N seconds."""
+def _serialise_summary(s) -> dict:
+    from dataclasses import asdict
+
+    d = asdict(s)
+    d["top_exceptions"] = [{"type": t, "count": c} for t, c in s.top_exceptions]
+    d["top_workers"] = [{"worker": w, "count": c} for w, c in s.top_workers]
+    d["top_queues"] = [{"queue": q, "count": c} for q, c in s.top_queues]
+    return d
+
+
+async def _sse_push_loop(
+    store: Store, broadcaster: SSEBroadcaster, config: Config
+) -> None:
+    """Push full task list + stats via SSE every tick. No polling needed."""
     while True:
         await asyncio.sleep(config.sse_throttle_seconds)
         dirty_tasks, new_ids = store.flush_dirty()
-        if dirty_tasks:
-            broadcaster.broadcast("task_update", {"updated": list(dirty_tasks)})
+        if not dirty_tasks and not new_ids:
+            continue
+
+        # Full task list — the frontend replaces its cache directly
+        summaries = store.get_task_list()
+        tasks = [_serialise_summary(s) for s in summaries]
+
+        # Stats for the nav ticker
+        started_at = getattr(store, "_app_started_at", time.time())
+        stats = {
+            "events_per_sec": round(store.events_per_second(), 1),
+            "tasks_tracked": len(store.tasks),
+            "uptime_sec": round(time.time() - started_at),
+            "broker_connected": True,  # we're pushing, so we're connected
+        }
+
+        broadcaster.broadcast("task_update", {"tasks": tasks, "stats": stats})
+
         if new_ids:
             broadcaster.broadcast("invocation_update", {"ids": new_ids[-20:]})
 
@@ -109,6 +137,7 @@ async def lifespan(app: FastAPI):
     consumer = CeleryEventConsumer(config, store)
     consumer.start()
 
+    store._app_started_at = time.time()
     sse_task = asyncio.create_task(_sse_push_loop(store, broadcaster, config))
     evict_task = asyncio.create_task(_eviction_loop(store, config))
 

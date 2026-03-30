@@ -1,8 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 
-function fmtUptime(sec: number, retentionSec: number): string {
-  // Only show uptime if less than retention window
-  if (sec >= retentionSec) return "";
+interface Stats {
+  events_per_sec: number;
+  tasks_tracked: number;
+  uptime_sec: number;
+  broker_connected: boolean;
+  sqlite_rows?: number | null;
+}
+
+function fmtUptime(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}s`;
   if (sec < 3600) return `${Math.round(sec / 60)}m`;
   const h = Math.floor(sec / 3600);
@@ -17,22 +23,15 @@ function fmtRate(rate: number): string {
 }
 
 export function BrokerStatus() {
-  const { data } = useQuery({
+  // Stats are pushed via SSE into this cache key — no polling.
+  // Initial fetch on mount, then SSE keeps it updated.
+  const { data } = useQuery<Stats>({
     queryKey: ["stats"],
-    queryFn: () =>
-      fetch("/api/stats").then((r) => r.json()) as Promise<{
-        events_per_sec: number;
-        tasks_tracked: number;
-        uptime_sec: number;
-        retention_sec: number;
-        broker_connected: boolean;
-      }>,
-    refetchInterval: 1000,
+    queryFn: () => fetch("/api/stats").then((r) => r.json()),
+    staleTime: Infinity, // SSE updates the cache directly, never auto-refetch
   });
 
   if (!data) return null;
-
-  const uptime = fmtUptime(data.uptime_sec, data.retention_sec);
 
   return (
     <div className="nav-status">
@@ -40,9 +39,7 @@ export function BrokerStatus() {
         <span className="ticker-rate">{fmtRate(data.events_per_sec)}</span>
         <span className="ticker-unit"> tasks/s</span>
       </span>
-      {uptime && (
-        <span className="ticker-uptime">{uptime}</span>
-      )}
+      <span className="ticker-uptime">{fmtUptime(data.uptime_sec)}</span>
       <span className={`dot ${data.broker_connected ? "dot-ok" : "dot-err"}`} />
     </div>
   );

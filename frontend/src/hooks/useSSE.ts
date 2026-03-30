@@ -15,16 +15,28 @@ export function useSSE() {
       sourceRef.current = es;
 
       es.addEventListener("task_update", () => {
-        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+        // Invalidate task list and summaries — NOT invocations
+        // (invocations change too fast and cause visual jumping)
+        queryClient.invalidateQueries({ queryKey: ["tasks"], exact: true });
+        queryClient.invalidateQueries({ queryKey: ["meta"] });
+        queryClient.invalidateQueries({ queryKey: ["stats"] });
       });
 
       es.addEventListener("invocation_update", () => {
-        queryClient.invalidateQueries({ queryKey: ["invocations"] });
+        // Only refresh invocation-related queries on terminal events
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = query.queryKey;
+            return (
+              (key[0] === "tasks" && (key[2] === "invocations" || key[2] === "summary" || key[2] === "latency")) ||
+              key[0] === "search"
+            );
+          },
+        });
       });
 
       es.onerror = () => {
         es.close();
-        // Reconnect after 2s (EventSource auto-reconnects, but just in case)
         setTimeout(connect, 2000);
       };
     }

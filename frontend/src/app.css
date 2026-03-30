@@ -419,6 +419,22 @@ h3 {
   color: var(--ink-2);
 }
 
+/* Truncate long content in table cells */
+.truncate {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.truncate-id {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
 .row-warn {
   border-left: 3px solid var(--yellow);
 }

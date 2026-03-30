@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type InvocationRecord } from "../api/client";
 import { Badge } from "../components/Badge";
-import { fmtMs, fmtTs } from "../util";
+import { fmtMs, fmtTs, shortTaskName } from "../util";
 
 export function Search() {
   const [params, setParams] = useState<Record<string, string>>({});
@@ -111,16 +111,17 @@ function ResultsTable({ results }: { results: InvocationRecord[] }) {
         {results.map((inv) => (
           <tr key={inv.task_id}>
             <td>
-              <Link to={`/invocations/${inv.task_id}`} className="mono">
-                {inv.task_id.slice(0, 12)}&hellip;
+              <Link to={`/invocations/${inv.task_id}`} className="mono small truncate-id" title={inv.task_id}>
+                {inv.task_id}
               </Link>
             </td>
             <td>
               <Link
                 to={`/tasks/${encodeURIComponent(inv.task_name)}`}
-                className="mono"
+                className="mono truncate"
+                title={inv.task_name}
               >
-                {inv.task_name}
+                {shortTaskName(inv.task_name)}
               </Link>
             </td>
             <td><Badge state={inv.state} small /></td>

@@ -34,3 +34,15 @@ export function fmtTsFull(val: number | null): string {
   const d = new Date(val * 1000);
   return d.toISOString().replace("T", " ").slice(0, 19);
 }
+
+/** Common prefixes to strip from task names for readability. */
+const TASK_PREFIXES = ["posthog.tasks.", "posthog."];
+
+export function shortTaskName(name: string): string {
+  for (const prefix of TASK_PREFIXES) {
+    if (name.startsWith(prefix) && name.length > prefix.length) {
+      return name.slice(prefix.length);
+    }
+  }
+  return name;
+}

@@ -5,7 +5,7 @@ import { api, type TaskSummary } from "../api/client";
 import { useBookmarks } from "../hooks/useBookmarks";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Sparkline } from "../components/Sparkline";
-import { fmtMs, fmtRate, fmtPerMin } from "../util";
+import { fmtMs, fmtRate, fmtPerMin, shortTaskName } from "../util";
 
 export function TaskList() {
   const { data: tasks = [] } = useQuery({
@@ -149,8 +149,8 @@ function TaskRow({ task: t }: { task: TaskSummary }) {
         <BookmarkButton taskName={t.task_name} />
       </td>
       <td>
-        <Link to={`/tasks/${encodeURIComponent(t.task_name)}`} className="mono">
-          {t.task_name}
+        <Link to={`/tasks/${encodeURIComponent(t.task_name)}`} className="mono truncate" title={t.task_name}>
+          {shortTaskName(t.task_name)}
         </Link>
       </td>
       <td className="col-spark">

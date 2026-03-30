@@ -221,8 +221,8 @@ export function TaskDetail() {
             {invocations.map((inv) => (
               <tr key={inv.task_id}>
                 <td>
-                  <Link to={`/invocations/${inv.task_id}`} className="mono">
-                    {inv.task_id.slice(0, 12)}&hellip;
+                  <Link to={`/invocations/${inv.task_id}`} className="mono small truncate-id" title={inv.task_id}>
+                    {inv.task_id}
                   </Link>
                 </td>
                 <td><Badge state={inv.state} small /></td>

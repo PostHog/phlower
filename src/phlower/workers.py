@@ -14,22 +14,29 @@ from celery import Celery
 
 logger = logging.getLogger(__name__)
 
-# K8s pod hostnames end with -{replicaset-hash}-{pod-hash}
-# e.g. posthog-worker-django-default-f98fbdbbc-54nrz → default
-_K8S_HASH_SUFFIX = re.compile(r"-[a-f0-9]{8,10}-[a-z0-9]{5}$")
 _NODE_PREFIX = re.compile(r"^node@(?:posthog-worker-django-)?")
+# K8s pod names end with replicaset+pod hashes. Formats vary:
+#   -f98fbdbbc-54nrz  (with dash)
+#   -7c75fdbff6wzs7   (concatenated, no dash between rs and pod hash)
+# Match: a dash followed by 10-15 alphanumeric chars at the end
+_K8S_HASH_SUFFIX = re.compile(r"-[a-z0-9]{10,15}$")
 
 
 def extract_worker_group(hostname: str) -> str:
     """Extract the consumer type from a Celery worker hostname.
 
     node@posthog-worker-django-default-f98fbdbbc-54nrz → default
+    node@posthog-worker-django-feature-flags-long-running-7c75fdbff6wzs7 → feature-flags-long-running
     node@posthog-worker-django-session-replay-worker-68c44cbdf6-2668h → session-replay-worker
     node@my-worker → my-worker
     """
     name = _NODE_PREFIX.sub("", hostname)
-    name = _K8S_HASH_SUFFIX.sub("", name)
-    return name or hostname
+    # Try stripping the concatenated hash (no dash between rs+pod)
+    stripped = _K8S_HASH_SUFFIX.sub("", name)
+    # If that didn't change anything, try the two-segment pattern
+    if stripped == name:
+        stripped = re.sub(r"-[a-f0-9]{7,10}-[a-z0-9]{4,6}$", "", name)
+    return stripped or hostname
 
 
 class WorkerRegistry:

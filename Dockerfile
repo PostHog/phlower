@@ -21,7 +21,8 @@ RUN uv sync --frozen --no-dev
 COPY frontend/ frontend/
 RUN cd frontend && CI=true pnpm install --frozen-lockfile && pnpm build
 
-RUN adduser --system --no-create-home phlower
+RUN adduser --system --no-create-home phlower \
+    && mkdir -p /data && chown phlower /data
 USER phlower
 
 ENV PATH="/app/.venv/bin:$PATH"

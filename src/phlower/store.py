@@ -230,7 +230,7 @@ class Store:
         self._new_invocation_ids: list[str] = []
 
         # rolling event counter for tasks/sec display
-        self._event_timestamps: deque[float] = deque()
+        self._event_timestamps: deque[float] = deque(maxlen=2000)
 
         # SQLite write-behind buffer (CompletedRecords, snapshotted at completion)
         self._sqlite_pending: list[CompletedRecord] = []
@@ -304,14 +304,9 @@ class Store:
         if rec is not None:
             # upgrade name if we now have it
             if task_name != "unknown" and rec.task_name == "unknown":
-                old = rec.task_name
                 rec.task_name = task_name
-                old_dq = self.invocations_by_task.get(old)
-                if old_dq:
-                    try:
-                        old_dq.remove(task_id)
-                    except ValueError:
-                        pass
+                # Don't dq.remove from "unknown" (O(n)) — stale entries are
+                # filtered on read via `if tid in self.invocations` check.
                 self.invocations_by_task[task_name].append(task_id)
             return rec
 
@@ -573,6 +568,15 @@ class Store:
         count = len(self._event_timestamps)
         return count / window if count else 0.0
 
+    def get_sparkline_points(self) -> dict[str, int]:
+        """Latest minute count per task for sparkline push."""
+        now_minute = int(time.time()) // 60 * 60
+        with self._lock:
+            return {
+                name: (agg.buckets[now_minute].count if now_minute in agg.buckets else 0)
+                for name, agg in self.tasks.items()
+            }
+
     def pickup_latency_by_queue(self) -> dict[str, float | None]:
         """p95 pickup latency (ms) per queue from recent data."""
         with self._lock:
@@ -596,6 +600,15 @@ class Store:
         with self._lock:
             agg = self.tasks.get(task_name)
             return agg.summary() if agg else None
+
+    def get_task_summaries(self, names: set[str]) -> list[TaskSummary]:
+        """Bulk summary — one lock acquisition for N tasks."""
+        with self._lock:
+            return [
+                agg.summary()
+                for name in names
+                if (agg := self.tasks.get(name)) is not None
+            ]
 
     def get_task_latency(self, task_name: str) -> list[dict] | None:
         with self._lock:

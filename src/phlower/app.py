@@ -27,16 +27,6 @@ FRONTEND_DIR = Path(__file__).parent / "frontend_dist"
 # ---------------------------------------------------------------------------
 
 
-def _serialise_summary(s) -> dict:
-    from dataclasses import asdict
-
-    d = asdict(s)
-    d["top_exceptions"] = [{"type": t, "count": c} for t, c in s.top_exceptions]
-    d["top_workers"] = [{"worker": w, "count": c} for w, c in s.top_workers]
-    d["top_queues"] = [{"queue": q, "count": c} for q, c in s.top_queues]
-    return d
-
-
 def _slim_summary(s) -> dict:
     """Lightweight summary for SSE — no sparkline, no top lists."""
     return {
@@ -76,10 +66,8 @@ async def _sse_push_loop(
         payload: dict = {"changed": []}
 
         if dirty_tasks:
-            for name in dirty_tasks:
-                s = store.get_task_summary(name)
-                if s:
-                    payload["changed"].append(_slim_summary(s))
+            summaries = store.get_task_summaries(dirty_tasks)
+            payload["changed"] = [_slim_summary(s) for s in summaries]
 
         if send_stats:
             payload["stats"] = {
@@ -99,12 +87,7 @@ async def _sparkline_push_loop(store: Store, broadcaster: SSEBroadcaster) -> Non
     """Push latest sparkline data points every 60s."""
     while True:
         await asyncio.sleep(60)
-        points: dict[str, int] = {}
-        now_minute = int(time.time()) // 60 * 60
-        with store._lock:
-            for name, agg in store.tasks.items():
-                bucket = agg.buckets.get(now_minute)
-                points[name] = bucket.count if bucket else 0
+        points = store.get_sparkline_points()
         if points:
             broadcaster.broadcast("sparkline_update", {"points": points})
 

@@ -122,11 +122,21 @@ class SQLiteStore:
         return total
 
     def purge_expired(self, cutoff_ts: float) -> int:
-        cur = self._conn.execute(
-            "DELETE FROM invocations WHERE finished_at < ?", (cutoff_ts,)
-        )
-        self._conn.commit()
-        return cur.rowcount
+        """Delete old rows in batches to avoid long write locks."""
+        total = 0
+        while True:
+            cur = self._conn.execute(
+                "DELETE FROM invocations WHERE rowid IN ("
+                "SELECT rowid FROM invocations WHERE finished_at < ? LIMIT 50000"
+                ")",
+                (cutoff_ts,),
+            )
+            self._conn.commit()
+            affected = cur.rowcount
+            total += affected
+            if affected < 50000:
+                break
+        return total
 
     # -- reads ------------------------------------------------------------
 
@@ -139,15 +149,15 @@ class SQLiteStore:
         return self._row_to_record(row)
 
     def load_recovery_data(self, since_ts: float) -> Iterator[sqlite3.Row]:
-        self._conn.row_factory = sqlite3.Row
-        cur = self._conn.execute(
+        cur = self._conn.cursor()
+        cur.row_factory = sqlite3.Row
+        cur.execute(
             "SELECT task_name, state, finished_at, runtime_ms, worker, queue, "
             "exception_type FROM invocations "
             "WHERE finished_at >= ? ORDER BY task_name, finished_at",
             (since_ts,),
         )
         yield from cur
-        self._conn.row_factory = None
 
     def row_count(self) -> int:
         row = self._conn.execute("SELECT count(*) FROM invocations").fetchone()

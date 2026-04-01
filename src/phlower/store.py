@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from itertools import islice
 from typing import TYPE_CHECKING
 
-from tdigest import TDigest
+from fastdigest import TDigest
 
 from .config import Config
 from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary

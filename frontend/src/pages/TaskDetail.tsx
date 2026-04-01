@@ -20,6 +20,7 @@ import { api, type InvocationRecord } from "../api/client";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Badge } from "../components/Badge";
 import { DataTable } from "../components/DataTable";
+import { Sparkline } from "../components/Sparkline";
 import { fmtMs, fmtRate, fmtTs, fmtNum, fmtPerMin } from "../util";
 
 ChartJS.register(
@@ -141,15 +142,10 @@ export function TaskDetail() {
 
   // SSE invocation_update triggers fetchPreviousPage to prepend new records
   useEffect(() => {
-    const handler = () => {
-      if (invocations.length > 0) {
-        fetchPreviousPage();
-      }
-    };
-    // Listen for custom event dispatched by SSE hook
+    const handler = () => fetchPreviousPage();
     window.addEventListener("phlower:invocation_update", handler);
     return () => window.removeEventListener("phlower:invocation_update", handler);
-  }, [fetchPreviousPage, invocations.length]);
+  }, [fetchPreviousPage]);
 
   const loadMore = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) fetchNextPage();
@@ -169,6 +165,10 @@ export function TaskDetail() {
 
       {/* Metrics */}
       <div className="metric-grid">
+        <div className="metric-card">
+          <Sparkline values={summary.sparkline} width={120} height={28} />
+          <span className="metric-label">1 h</span>
+        </div>
         <Metric label="Rate" value={fmtPerMin(summary.rate_per_min)} />
         <Metric label="Total (24 h)" value={fmtNum(summary.total_count)} />
         <Metric label="Success" value={fmtNum(summary.success_count)} cls="st-success" />

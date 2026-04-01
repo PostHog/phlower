@@ -1,6 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api, type InvocationRecord } from "../api/client";
+import type { InvocationRecord } from "../api/client";
+import { invocationDetailOptions } from "../api/generated/@tanstack/react-query.gen";
 import { Badge } from "../components/Badge";
 import { fmtMs, fmtTsFull } from "../util";
 
@@ -15,8 +16,7 @@ export function InvocationDetail() {
   const id = taskId!;
 
   const { data: inv } = useQuery({
-    queryKey: ["invocations", id],
-    queryFn: () => api.invocation(id),
+    ...invocationDetailOptions({ path: { task_id: id } }),
   });
 
   if (!inv) {

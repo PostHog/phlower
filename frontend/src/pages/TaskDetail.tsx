@@ -17,6 +17,7 @@ import {
 import "chartjs-adapter-date-fns";
 import { Line, Bar } from "react-chartjs-2";
 import { api, type InvocationRecord } from "../api/client";
+import { taskSummaryOptions, taskLatencyOptions } from "../api/generated/@tanstack/react-query.gen";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Badge } from "../components/Badge";
 import { DataTable } from "../components/DataTable";
@@ -85,15 +86,13 @@ export function TaskDetail() {
   const name = taskName!;
 
   const { data: summary } = useQuery({
-    queryKey: ["tasks", name, "summary"],
-    queryFn: () => api.taskSummary(name),
-    refetchInterval: 5000, // SSE updates this cache too, but fallback poll for safety
+    ...taskSummaryOptions({ path: { task_name: name } }),
+    refetchInterval: 5000,
   });
 
   const { data: latency = [] } = useQuery({
-    queryKey: ["tasks", name, "latency"],
-    queryFn: () => api.taskLatency(name),
-    refetchInterval: 30000, // per-minute data, no need to refresh faster
+    ...taskLatencyOptions({ path: { task_name: name } }),
+    refetchInterval: 30000,
   });
 
   // Bidirectional infinite query:

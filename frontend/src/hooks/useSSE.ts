@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskSummary } from "../api/client";
+import {
+  listTasksQueryKey,
+  statsQueryKey,
+  taskSummaryQueryKey,
+} from "../api/generated/@tanstack/react-query.gen";
 
 /**
  * SSE stream — pushes only changed task summaries + stats.
@@ -22,7 +27,7 @@ export function useSSE() {
 
           // Merge changed summaries into the cached task list
           if (payload.changed?.length) {
-            queryClient.setQueryData<TaskSummary[]>(["tasks"], (old) => {
+            queryClient.setQueryData<TaskSummary[]>(listTasksQueryKey(), (old) => {
               if (!old) return old;
               const updated = new Map(old.map((t) => [t.task_name, t]));
               for (const diff of payload.changed) {
@@ -34,36 +39,32 @@ export function useSSE() {
                 }
                 // Also update per-task summary cache (detail page)
                 queryClient.setQueryData(
-                  ["tasks", diff.task_name, "summary"],
+                  taskSummaryQueryKey({ path: { task_name: diff.task_name } }),
                   (old: TaskSummary | undefined) => old ? { ...old, ...diff } : undefined,
                 );
               }
               return [...updated.values()];
             });
-
-            // Latency charts: per-minute data, refreshed via refetchInterval
-            // on the detail page (30s). No SSE invalidation needed.
           }
 
           // Stats — write directly
           if (payload.stats) {
-            queryClient.setQueryData(["stats"], payload.stats);
+            queryClient.setQueryData(statsQueryKey(), payload.stats);
           }
         } catch {
           // Fallback: invalidate to trigger refetch
-          queryClient.invalidateQueries({ queryKey: ["tasks"], exact: true });
+          queryClient.invalidateQueries({ queryKey: listTasksQueryKey() });
         }
       });
 
       es.addEventListener("sparkline_update", (e) => {
         try {
           const { points } = JSON.parse(e.data) as { points: Record<string, number> };
-          queryClient.setQueryData<TaskSummary[]>(["tasks"], (old) => {
+          queryClient.setQueryData<TaskSummary[]>(listTasksQueryKey(), (old) => {
             if (!old) return old;
             return old.map((t) => {
               const count = points[t.task_name];
               if (count === undefined) return t;
-              // Shift sparkline left, append new point
               const spark = [...t.sparkline.slice(1), count];
               return { ...t, sparkline: spark };
             });
@@ -74,12 +75,19 @@ export function useSSE() {
       es.addEventListener("invocation_update", () => {
         // Invalidate invocation queries so active detail pages refetch
         queryClient.invalidateQueries({
-          predicate: (query) =>
-            Array.isArray(query.queryKey) &&
-            query.queryKey[0] === "tasks" &&
-            query.queryKey[2] === "invocations",
+          predicate: (query) => {
+            const key = query.queryKey[0];
+            return typeof key === "object" && key !== null && "_id" in key &&
+              (key as { _id: string })._id === "taskInvocations";
+          },
         });
-        queryClient.invalidateQueries({ queryKey: ["search"] });
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = query.queryKey[0];
+            return typeof key === "object" && key !== null && "_id" in key &&
+              (key as { _id: string })._id === "searchInvocations";
+          },
+        });
       });
 
       es.onerror = () => {

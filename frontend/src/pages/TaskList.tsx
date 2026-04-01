@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { type ColumnDef } from "@tanstack/react-table";
-import { api, type TaskSummary } from "../api/client";
+import type { TaskSummary } from "../api/client";
+import { listTasksOptions, metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { useBookmarks } from "../hooks/useBookmarks";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Sparkline } from "../components/Sparkline";
@@ -10,14 +11,10 @@ import { DataTable } from "../components/DataTable";
 import { fmtMs, fmtRate, fmtPerMin, shortTaskName } from "../util";
 
 export function TaskList() {
-  const { data: tasks = [] } = useQuery({
-    queryKey: ["tasks"],
-    queryFn: api.tasks,
-  });
+  const { data: tasks = [] } = useQuery({ ...listTasksOptions() });
 
   const { data: meta } = useQuery({
-    queryKey: ["meta"],
-    queryFn: api.meta,
+    ...metaOptions(),
     refetchInterval: 30000,
   });
 

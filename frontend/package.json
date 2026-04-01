@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typegen": "cd .. && uv run python -c \"import json; from phlower.app import create_app; print(json.dumps(create_app().openapi()))\" > /tmp/phlower-openapi.json && cd frontend && openapi-ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.95.2",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@hey-api/openapi-ts": "^0.94.5",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

@@ -305,6 +305,7 @@ h3 {
 .st-revoked  { background: var(--gray-bg); color: var(--ink-muted); }
 
 .txt-fail { color: var(--red) !important; }
+.txt-retry { color: #b8860b; font-size: 11px; }
 
 /* ═══════════════════════════════════════════════════════
    METRIC GRID

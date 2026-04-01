@@ -1,12 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-
-interface Stats {
-  events_per_sec: number;
-  tasks_tracked: number;
-  uptime_sec: number;
-  broker_connected: boolean;
-  sqlite_rows?: number | null;
-}
+import { statsOptions } from "../api/generated/@tanstack/react-query.gen";
 
 function fmtUptime(sec: number): string {
   if (sec < 60) return `${Math.round(sec)}s`;
@@ -25,10 +18,9 @@ function fmtRate(rate: number): string {
 export function BrokerStatus() {
   // Stats are pushed via SSE into this cache key — no polling.
   // Initial fetch on mount, then SSE keeps it updated.
-  const { data } = useQuery<Stats>({
-    queryKey: ["stats"],
-    queryFn: () => fetch("/api/stats").then((r) => r.json()),
-    staleTime: Infinity, // SSE updates the cache directly, never auto-refetch
+  const { data } = useQuery({
+    ...statsOptions(),
+    staleTime: Infinity,
   });
 
   if (!data) return null;

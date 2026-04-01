@@ -486,6 +486,7 @@ class Store:
             if not self._should_track(name):
                 return
             agg = self._get_or_create_task(name)
+            agg.active_count = max(0, agg.active_count - 1)
 
             rec = self._ensure_record(task_id, name)
             queue = rec.queue

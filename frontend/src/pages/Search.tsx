@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type InvocationRecord } from "../api/client";
+// TODO: migrate to searchInvocationsOptions once custom param handling is resolved
 import { Badge } from "../components/Badge";
 import { fmtMs, fmtTs, shortTaskName } from "../util";
 

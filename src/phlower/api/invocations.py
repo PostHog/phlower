@@ -1,28 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from fastapi import APIRouter, HTTPException, Query, Request
+
+from ..schemas import InvocationResponse
 
 router = APIRouter()
 
 
-def _serialise(r) -> dict:
-    d = asdict(r)
-    d["state"] = r.state.value
-    d["transitions"] = [{"state": s, "ts": t} for s, t in r.transitions]
-    return d
-
-
-@router.get("/api/invocations/{task_id}")
-async def invocation_detail(task_id: str, request: Request) -> dict:
+@router.get("/api/invocations/{task_id}", response_model=InvocationResponse, operation_id="invocationDetail")
+async def invocation_detail(task_id: str, request: Request) -> InvocationResponse:
     rec = request.app.state.store.get_invocation(task_id)
     if rec is None:
         raise HTTPException(404, f"Invocation {task_id!r} not found")
-    return _serialise(rec)
+    return InvocationResponse.from_internal(rec)
 
 
-@router.get("/api/search/invocations")
+@router.get("/api/search/invocations", response_model=list[InvocationResponse], operation_id="searchInvocations")
 async def search_invocations(
     request: Request,
     task_name: str | None = None,
@@ -35,7 +28,7 @@ async def search_invocations(
     time_to: float | None = None,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
-) -> list[dict]:
+) -> list[InvocationResponse]:
     results = request.app.state.store.search_invocations(
         task_name=task_name,
         status=status,
@@ -48,4 +41,4 @@ async def search_invocations(
         limit=limit,
         offset=offset,
     )
-    return [_serialise(r) for r in results]
+    return [InvocationResponse.from_internal(r) for r in results]

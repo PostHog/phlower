@@ -29,23 +29,8 @@ FRONTEND_DIR = Path(__file__).parent / "frontend_dist"
 
 def _slim_summary(s) -> dict:
     """Lightweight summary for SSE — no sparkline, no top lists."""
-    return {
-        "task_name": s.task_name,
-        "total_count": s.total_count,
-        "success_count": s.success_count,
-        "failure_count": s.failure_count,
-        "retry_count": s.retry_count,
-        "active_count": s.active_count,
-        "failure_rate": s.failure_rate,
-        "p50_ms": s.p50_ms,
-        "p95_ms": s.p95_ms,
-        "p99_ms": s.p99_ms,
-        "mean_ms": s.mean_ms,
-        "min_ms": s.min_ms,
-        "max_ms": s.max_ms,
-        "std_ms": s.std_ms,
-        "rate_per_min": s.rate_per_min,
-    }
+    from .schemas import SlimSummary
+    return SlimSummary.from_internal(s).model_dump()
 
 
 async def _sse_push_loop(

@@ -181,9 +181,13 @@ class SQLiteStore:
                 break
         return results
 
-    def load_recovery_counts(self, since_ts: float) -> Iterator[sqlite3.Row]:
+    def open_recovery_conn(self) -> sqlite3.Connection:
+        """Open a separate connection for recovery. Caller must close it."""
+        return self._connect(self.db_path)
+
+    def load_recovery_counts(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
         """Aggregated counts per task/state/minute for fast recovery."""
-        cur = self._conn.cursor()
+        cur = conn.cursor()
         cur.row_factory = sqlite3.Row
         cur.execute(
             "SELECT task_name, state, "
@@ -197,9 +201,9 @@ class SQLiteStore:
         )
         yield from cur
 
-    def load_recovery_runtimes(self, since_ts: float) -> Iterator[sqlite3.Row]:
+    def load_recovery_runtimes(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
         """Stream individual runtime values for t-digest population."""
-        cur = self._conn.cursor()
+        cur = conn.cursor()
         cur.row_factory = sqlite3.Row
         cur.execute(
             "SELECT task_name, "
@@ -212,9 +216,9 @@ class SQLiteStore:
         )
         yield from cur
 
-    def load_recovery_pickup(self, since_ts: float) -> Iterator[sqlite3.Row]:
+    def load_recovery_pickup(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
         """Stream received_at/started_at pairs for pickup latency rebuild."""
-        cur = self._conn.cursor()
+        cur = conn.cursor()
         cur.row_factory = sqlite3.Row
         cur.execute(
             "SELECT queue, (started_at - received_at) * 1000 AS wait_ms "

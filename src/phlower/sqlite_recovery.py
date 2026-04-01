@@ -27,32 +27,36 @@ def rebuild_aggregates(store: Store, sqlite_store: SQLiteStore, since_ts: float)
       3. Pickup latency — recent received→started wait times
     """
     start = time.monotonic()
+    recovery_conn = sqlite_store.open_recovery_conn()
 
-    # Phase 1: aggregated counts
-    count_rows = _load_counts(store, sqlite_store, since_ts)
-    elapsed_counts = time.monotonic() - start
-    logger.info("Recovery phase 1 (counts): %d grouped rows in %.1fs", count_rows, elapsed_counts)
+    try:
+        # Phase 1: aggregated counts
+        count_rows = _load_counts(store, sqlite_store, recovery_conn, since_ts)
+        elapsed_counts = time.monotonic() - start
+        logger.info("Recovery phase 1 (counts): %d grouped rows in %.1fs", count_rows, elapsed_counts)
 
-    # Phase 2: runtime digests
-    runtime_rows = _load_runtimes(store, sqlite_store, since_ts)
-    elapsed_runtimes = time.monotonic() - start - elapsed_counts
-    logger.info("Recovery phase 2 (runtimes): %d rows in %.1fs", runtime_rows, elapsed_runtimes)
+        # Phase 2: runtime digests
+        runtime_rows = _load_runtimes(store, sqlite_store, recovery_conn, since_ts)
+        elapsed_runtimes = time.monotonic() - start - elapsed_counts
+        logger.info("Recovery phase 2 (runtimes): %d rows in %.1fs", runtime_rows, elapsed_runtimes)
 
-    # Phase 3: pickup latency
-    pickup_rows = _load_pickup_latency(store, sqlite_store, since_ts)
-    logger.info("Recovery phase 3 (pickup latency): %d rows", pickup_rows)
+        # Phase 3: pickup latency
+        pickup_rows = _load_pickup_latency(store, sqlite_store, recovery_conn, since_ts)
+        logger.info("Recovery phase 3 (pickup latency): %d rows", pickup_rows)
+    finally:
+        recovery_conn.close()
 
     elapsed = time.monotonic() - start
     logger.info("Recovery complete: %d count groups + %d runtimes in %.1fs", count_rows, runtime_rows, elapsed)
     return count_rows
 
 
-def _load_counts(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:
+def _load_counts(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:
     """Load pre-aggregated counts into task aggregates."""
     batch: list[tuple] = []
     total = 0
 
-    for row in sqlite_store.load_recovery_counts(since_ts):
+    for row in sqlite_store.load_recovery_counts(conn, since_ts):
         task_name = row["task_name"]
         state_str = row["state"]
 
@@ -106,7 +110,7 @@ def _flush_counts(store: Store, batch: list[tuple]) -> None:
                 agg.exceptions[exception_type] += cnt
 
 
-def _load_runtimes(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:
+def _load_runtimes(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:
     """Stream runtime values into t-digests using batch_update."""
     # Group runtimes by task (and by bucket for recent data)
     by_task: dict[str, list[float]] = defaultdict(list)
@@ -114,7 +118,7 @@ def _load_runtimes(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> 
     bucket_cutoff = int(time.time()) - 48 * 3600
     total = 0
 
-    for row in sqlite_store.load_recovery_runtimes(since_ts):
+    for row in sqlite_store.load_recovery_runtimes(conn, since_ts):
         task_name = row["task_name"]
         minute_ts = row["minute_ts"]
         runtime_ms = row["runtime_ms"]
@@ -160,11 +164,11 @@ def _flush_runtimes(
                     bucket.digest.batch_update(values)
 
 
-def _load_pickup_latency(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:
+def _load_pickup_latency(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:
     """Rebuild pickup latency from recent data."""
     count = 0
     with store._lock:
-        for row in sqlite_store.load_recovery_pickup(since_ts):
+        for row in sqlite_store.load_recovery_pickup(conn, since_ts):
             queue = row["queue"] or "_global"
             store._pickup_latencies[queue].append(row["wait_ms"])
             count += 1

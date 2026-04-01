@@ -51,7 +51,14 @@ const invocationColumns: ColumnDef<InvocationRecord, unknown>[] = [
     accessorKey: "state",
     header: "State",
     size: 100,
-    cell: ({ row }) => <Badge state={row.original.state} small />,
+    cell: ({ row }) => (
+      <>
+        <Badge state={row.original.state} small />
+        {row.original.retries > 0 && (
+          <span className="txt-retry" title={`${row.original.retries} retries`}> ×{row.original.retries}</span>
+        )}
+      </>
+    ),
   },
   {
     accessorKey: "worker",

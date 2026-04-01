@@ -68,9 +68,12 @@ class WorkerRegistry:
                 self._worker_groups[hostname] = extract_worker_group(hostname)
             self.last_inspect_at = time.time()
 
+        with self._lock:
+            total_queues = sum(len(qs) for qs in self._worker_queues.values())
         logger.info(
-            "Worker inspect: %d workers, %d unique groups",
+            "Worker inspect: %d workers, %d unique queues, %d unique groups",
             len(result),
+            total_queues,
             len(set(self._worker_groups.values())),
         )
 

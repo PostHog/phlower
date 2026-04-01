@@ -31,30 +31,23 @@ export function TaskList() {
     [tasks, meta?.queues]
   );
 
-  // Sort: bookmarked first, then let TanStack Table handle the rest
-  const sorted = useMemo(() => {
-    const filtered = tasks.filter((t) => {
+  const filtered = useMemo(() => {
+    return tasks.filter((t) => {
       if (queueFilter && !t.top_queues.some((q) => q.queue === queueFilter))
         return false;
       if (groupFilter && !t.top_workers.some((w) => w.worker.includes(groupFilter)))
         return false;
       return true;
     });
-    return [...filtered].sort((a, b) => {
-      const ab = isBookmarked(a.task_name) ? 0 : 1;
-      const bb = isBookmarked(b.task_name) ? 0 : 1;
-      if (ab !== bb) return ab - bb;
-      return a.task_name.localeCompare(b.task_name);
-    });
-  }, [tasks, queueFilter, groupFilter, isBookmarked]);
+  }, [tasks, queueFilter, groupFilter]);
 
   const columns = useMemo<ColumnDef<TaskSummary, unknown>[]>(
     () => [
       {
         id: "bookmark",
+        accessorFn: (row) => (isBookmarked(row.task_name) ? 1 : 0),
         header: "",
         size: 36,
-        enableSorting: false,
         meta: { className: "col-bm" },
         cell: ({ row }) => <BookmarkButton taskName={row.original.task_name} />,
       },
@@ -73,8 +66,8 @@ export function TaskList() {
       },
       {
         id: "sparkline",
+        accessorFn: (row) => row.sparkline.reduce((a, b) => a + b, 0),
         header: "1 h",
-        enableSorting: false,
         meta: { className: "col-spark" },
         cell: ({ row }) => <Sparkline values={row.original.sparkline} />,
       },
@@ -118,7 +111,7 @@ export function TaskList() {
         cell: ({ row }) => fmtMs(row.original.p99_ms),
       },
     ],
-    []
+    [isBookmarked]
   );
 
   const getRowClassName = (t: TaskSummary) => {
@@ -166,12 +159,12 @@ export function TaskList() {
         </div>
       ) : null}
 
-      {sorted.length > 0 ? (
+      {filtered.length > 0 ? (
         <DataTable
-          data={sorted}
+          data={filtered}
           columns={columns}
           getRowClassName={getRowClassName}
-          initialSorting={[{ id: "task_name", desc: false }]}
+          initialSorting={[{ id: "bookmark", desc: true }, { id: "task_name", desc: false }]}
         />
       ) : (
         <div className="empty-state">

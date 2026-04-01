@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
 
-from tdigest import TDigest
+from fastdigest import TDigest
 
 from .models import MinuteBucket, TaskState
 from .sqlite_store import SQLiteStore
@@ -106,41 +107,57 @@ def _flush_counts(store: Store, batch: list[tuple]) -> None:
 
 
 def _load_runtimes(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:
-    """Stream runtime values into t-digests."""
-    batch: list[tuple[str, int, float]] = []
-    total = 0
-    # Only populate per-bucket digests for recent data (charts)
+    """Stream runtime values into t-digests using batch_update."""
+    # Group runtimes by task (and by bucket for recent data)
+    by_task: dict[str, list[float]] = defaultdict(list)
+    by_bucket: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
     bucket_cutoff = int(time.time()) - 48 * 3600
+    total = 0
 
     for row in sqlite_store.load_recovery_runtimes(since_ts):
-        batch.append((row["task_name"], row["minute_ts"], row["runtime_ms"]))
+        task_name = row["task_name"]
+        minute_ts = row["minute_ts"]
+        runtime_ms = row["runtime_ms"]
 
-        if len(batch) >= BATCH_SIZE:
-            _flush_runtimes(store, batch, bucket_cutoff)
-            total += len(batch)
-            batch.clear()
+        by_task[task_name].append(runtime_ms)
+        if minute_ts >= bucket_cutoff:
+            by_bucket[task_name][minute_ts].append(runtime_ms)
+        total += 1
 
-    if batch:
-        _flush_runtimes(store, batch, bucket_cutoff)
-        total += len(batch)
+        # Flush periodically to avoid unbounded memory
+        if total % 1_000_000 == 0:
+            _flush_runtimes(store, by_task, by_bucket)
+            by_task.clear()
+            by_bucket.clear()
+            logger.info("Recovery runtimes progress: %dM rows", total // 1_000_000)
+
+    if by_task:
+        _flush_runtimes(store, by_task, by_bucket)
 
     return total
 
 
-def _flush_runtimes(store: Store, batch: list[tuple[str, int, float]], bucket_cutoff: int) -> None:
-    """Apply runtime values under a single lock acquisition."""
+def _flush_runtimes(
+    store: Store,
+    by_task: dict[str, list[float]],
+    by_bucket: dict[str, dict[int, list[float]]],
+) -> None:
+    """Batch-update t-digests under a single lock acquisition."""
     with store._lock:
-        for task_name, minute_ts, runtime_ms in batch:
+        for task_name, values in by_task.items():
             agg = store._get_or_create_task(task_name)
-            agg.runtime_digest.update(runtime_ms)
+            agg.runtime_digest.batch_update(values)
 
-            # Per-bucket digest only for recent data (used by latency charts)
-            if minute_ts >= bucket_cutoff:
+        for task_name, buckets in by_bucket.items():
+            agg = store.tasks.get(task_name)
+            if agg is None:
+                continue
+            for minute_ts, values in buckets.items():
                 bucket = agg.buckets.get(minute_ts)
                 if bucket is not None:
                     if bucket.digest is None:
                         bucket.digest = TDigest()
-                    bucket.digest.update(runtime_ms)
+                    bucket.digest.batch_update(values)
 
 
 def _load_pickup_latency(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:

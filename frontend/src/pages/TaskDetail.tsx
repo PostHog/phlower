@@ -177,6 +177,10 @@ export function TaskDetail() {
         <Metric label="p50" value={fmtMs(summary.p50_ms)} />
         <Metric label="p95" value={fmtMs(summary.p95_ms)} />
         <Metric label="p99" value={fmtMs(summary.p99_ms)} />
+        <Metric label="Mean" value={fmtMs(summary.mean_ms)} />
+        <Metric label="Min" value={fmtMs(summary.min_ms)} />
+        <Metric label="Max" value={fmtMs(summary.max_ms)} />
+        <Metric label="Std dev" value={fmtMs(summary.std_ms)} />
       </div>
 
       {/* Distributions */}

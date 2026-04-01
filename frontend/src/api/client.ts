@@ -19,6 +19,10 @@ export interface TaskSummary {
   p50_ms: number | null;
   p95_ms: number | null;
   p99_ms: number | null;
+  mean_ms: number | null;
+  min_ms: number | null;
+  max_ms: number | null;
+  std_ms: number | null;
   rate_per_min: number;
   top_exceptions: { type: string; count: number }[];
   top_workers: { worker: string; count: number }[];

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from itertools import islice
 from typing import TYPE_CHECKING
 
-from tdigest import TDigest
+from fastdigest import TDigest
 
 from .config import Config
 from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary
@@ -158,6 +158,10 @@ class TaskAggregate:
             p50_ms=d.percentile(50) if has_data else None,
             p95_ms=d.percentile(95) if has_data else None,
             p99_ms=d.percentile(99) if has_data else None,
+            mean_ms=d.mean() if has_data else None,
+            min_ms=d.min() if has_data else None,
+            max_ms=d.max() if has_data else None,
+            std_ms=d.std() if has_data else None,
             rate_per_min=self._recent_rate(),
             top_exceptions=self.exceptions.most_common(10),
             top_workers=self.workers.most_common(10),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from tdigest import TDigest
+from fastdigest import TDigest
 
 
 class TaskState(str, Enum):
@@ -60,6 +60,10 @@ class TaskSummary:
     p50_ms: float | None
     p95_ms: float | None
     p99_ms: float | None
+    mean_ms: float | None
+    min_ms: float | None
+    max_ms: float | None
+    std_ms: float | None
     top_exceptions: list[tuple[str, int]]
     top_workers: list[tuple[str, int]]
     rate_per_min: float

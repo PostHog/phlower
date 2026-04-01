@@ -40,6 +40,10 @@ def _slim_summary(s) -> dict:
         "p50_ms": s.p50_ms,
         "p95_ms": s.p95_ms,
         "p99_ms": s.p99_ms,
+        "mean_ms": s.mean_ms,
+        "min_ms": s.min_ms,
+        "max_ms": s.max_ms,
+        "std_ms": s.std_ms,
         "rate_per_min": s.rate_per_min,
     }
 

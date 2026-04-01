@@ -72,9 +72,13 @@ export function useSSE() {
       });
 
       es.addEventListener("invocation_update", () => {
-        // Signal the detail page to fetchPreviousPage (prepend new records)
-        window.dispatchEvent(new Event("phlower:invocation_update"));
-        // Also invalidate search results
+        // Invalidate invocation queries so active detail pages refetch
+        queryClient.invalidateQueries({
+          predicate: (query) =>
+            Array.isArray(query.queryKey) &&
+            query.queryKey[0] === "tasks" &&
+            query.queryKey[2] === "invocations",
+        });
         queryClient.invalidateQueries({ queryKey: ["search"] });
       });
 

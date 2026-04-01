@@ -8,7 +8,7 @@ import { useBookmarks } from "../hooks/useBookmarks";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Sparkline } from "../components/Sparkline";
 import { DataTable } from "../components/DataTable";
-import { fmtMs, fmtRate, fmtPerMin, shortTaskName } from "../util";
+import { fmtMs, fmtNum, fmtRate, fmtPerMin, shortTaskName } from "../util";
 
 export function TaskList() {
   const { data: tasks = [] } = useQuery({ ...listTasksOptions() });
@@ -81,13 +81,23 @@ export function TaskList() {
       },
       {
         accessorKey: "failure_rate",
-        header: "Fail rate",
+        header: "Fail / Retry",
         meta: { className: "r num" },
-        cell: ({ row }) => (
-          <span className={row.original.failure_rate > 0.05 ? "txt-fail" : ""}>
-            {fmtRate(row.original.failure_rate)}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const { failure_rate, retry_count } = row.original;
+          return (
+            <span>
+              <span className={failure_rate > 0.05 ? "txt-fail" : ""}>
+                {fmtRate(failure_rate)}
+              </span>
+              {retry_count > 0 && (
+                <span className="txt-retry" title={`${retry_count} retries`}>
+                  {" "}/ {fmtNum(retry_count)}
+                </span>
+              )}
+            </span>
+          );
+        },
       },
       {
         accessorKey: "p50_ms",
@@ -115,6 +125,7 @@ export function TaskList() {
     const classes: string[] = [];
     if (t.failure_rate > 0.25) classes.push("row-crit");
     else if (t.failure_rate > 0.1) classes.push("row-warn");
+    else if (t.retry_count > 0 && t.retry_count / Math.max(t.total_count, 1) > 0.1) classes.push("row-warn");
     if (isBookmarked(t.task_name)) classes.push("bm-row");
     return classes.join(" ");
   };

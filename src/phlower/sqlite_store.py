@@ -148,12 +148,45 @@ class SQLiteStore:
             return None
         return self._row_to_record(row)
 
+    def list_by_task(
+        self,
+        task_name: str,
+        *,
+        limit: int = 100,
+        before_ts: float | None = None,
+        after_ts: float | None = None,
+        exclude_ids: set[str] | None = None,
+    ) -> list[InvocationRecord]:
+        """List invocations for a task, newest first. Uses idx_inv_task_name."""
+        clauses = ["task_name = ?"]
+        params: list[object] = [task_name]
+        if before_ts is not None:
+            clauses.append("finished_at < ?")
+            params.append(before_ts)
+        if after_ts is not None:
+            clauses.append("finished_at > ?")
+            params.append(after_ts)
+        where = " AND ".join(clauses)
+        # Fetch extra rows to compensate for exclude_ids filtering
+        fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
+        sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ?"
+        params.append(fetch_limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        results: list[InvocationRecord] = []
+        for row in rows:
+            if exclude_ids and row[0] in exclude_ids:
+                continue
+            results.append(self._row_to_record(row))
+            if len(results) >= limit:
+                break
+        return results
+
     def load_recovery_data(self, since_ts: float) -> Iterator[sqlite3.Row]:
         cur = self._conn.cursor()
         cur.row_factory = sqlite3.Row
         cur.execute(
             "SELECT task_name, state, finished_at, runtime_ms, worker, queue, "
-            "exception_type FROM invocations "
+            "exception_type, received_at, started_at FROM invocations "
             "WHERE finished_at >= ? ORDER BY task_name, finished_at",
             (since_ts,),
         )

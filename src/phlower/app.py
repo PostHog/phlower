@@ -118,6 +118,21 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         logger.exception("SQLite flush loop crashed")
 
 
+async def _background_recovery(store: Store, sqlite_store, config: Config) -> None:
+    """Rebuild aggregates from SQLite in a background thread. Non-blocking."""
+    from .sqlite_recovery import rebuild_aggregates
+
+    since = time.time() - config.sqlite_recovery_hours * 3600
+    loop = asyncio.get_event_loop()
+    try:
+        count = await loop.run_in_executor(
+            None, rebuild_aggregates, store, sqlite_store, since
+        )
+        logger.info("Background recovery: %d rows restored", count)
+    except Exception:
+        logger.exception("Background recovery failed")
+
+
 async def _sqlite_purge_loop(sqlite_store, config: Config) -> None:
     """Thin detail fields after SQLITE_DETAIL_HOURS, delete after AGGREGATE_RETENTION_HOURS."""
     while True:
@@ -157,13 +172,7 @@ async def lifespan(app: FastAPI):
         sqlite_store.init_schema()
         logger.info("SQLite enabled at %s", config.sqlite_path)
 
-        # Blocking recovery — rebuild aggregates before accepting traffic
-        from .sqlite_recovery import rebuild_aggregates
-
-        since = time.time() - config.sqlite_recovery_hours * 3600
         store = Store(config, sqlite_store=sqlite_store)
-        count = rebuild_aggregates(store, sqlite_store, since)
-        logger.info("Recovered %d rows from SQLite", count)
     else:
         store = Store(config)
 
@@ -186,6 +195,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(
                 _sqlite_purge_loop(sqlite_store, config)
             )
+        )
+        # Non-blocking recovery — rebuild aggregates in a thread while serving
+        sqlite_tasks.append(
+            asyncio.create_task(_background_recovery(store, sqlite_store, config))
         )
 
     app.state.store = store

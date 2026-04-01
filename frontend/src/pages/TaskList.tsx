@@ -25,6 +25,12 @@ export function TaskList() {
   const [queueFilter, setQueueFilter] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
 
+  // Aggregate sparklines per queue from task data
+  const queueSparklines = useMemo(
+    () => computeQueueSparklines(tasks, meta?.queues || []),
+    [tasks, meta?.queues]
+  );
+
   // Sort: bookmarked first, then let TanStack Table handle the rest
   const sorted = useMemo(() => {
     const filtered = tasks.filter((t) => {
@@ -137,7 +143,14 @@ export function TaskList() {
               <span className="filter-label">Queue</span>
               <FilterPill label="All" active={queueFilter === ""} onClick={() => setQueueFilter("")} />
               {meta.queues.map((q) => (
-                <FilterPill key={q} label={q} active={queueFilter === q} onClick={() => setQueueFilter(q)} />
+                <FilterPill
+                  key={q}
+                  label={q}
+                  active={queueFilter === q}
+                  onClick={() => setQueueFilter(q)}
+                  sparkline={queueSparklines[q]}
+                  waitMs={meta.pickup_latency_p95?.[q]}
+                />
               ))}
             </div>
           )}
@@ -173,10 +186,60 @@ export function TaskList() {
   );
 }
 
-function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FilterPill({
+  label,
+  active,
+  onClick,
+  sparkline,
+  waitMs,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  sparkline?: number[];
+  waitMs?: number | null;
+}) {
+  const waitClass =
+    waitMs != null && waitMs > 5000
+      ? "pill-wait-red"
+      : waitMs != null && waitMs > 1000
+        ? "pill-wait-yellow"
+        : "";
+
   return (
-    <button className={`filter-pill${active ? " active" : ""}`} onClick={onClick}>
-      {label}
+    <button
+      className={`filter-pill${active ? " active" : ""}${sparkline ? " with-spark" : ""} ${waitClass}`}
+      onClick={onClick}
+    >
+      {sparkline && (
+        <Sparkline values={sparkline} width={40} height={14} />
+      )}
+      <span>{label}</span>
+      {waitMs != null && (
+        <span className="pill-wait">{fmtMs(waitMs)}</span>
+      )}
     </button>
   );
+}
+
+function computeQueueSparklines(
+  tasks: TaskSummary[],
+  queues: string[]
+): Record<string, number[]> {
+  const result: Record<string, number[]> = {};
+  for (const q of queues) {
+    const matching = tasks.filter((t) =>
+      t.top_queues.some((tq) => tq.queue === q)
+    );
+    if (matching.length === 0) continue;
+    const len = matching[0]?.sparkline.length || 60;
+    const agg = new Array(len).fill(0);
+    for (const t of matching) {
+      for (let i = 0; i < Math.min(t.sparkline.length, len); i++) {
+        agg[i] += t.sparkline[i];
+      }
+    }
+    result[q] = agg;
+  }
+  return result;
 }

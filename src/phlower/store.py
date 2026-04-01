@@ -638,7 +638,21 @@ class Store:
                 results.append(rec)
                 if len(results) >= limit:
                     break
-            return results
+
+        # Fill remaining slots from SQLite if in-memory didn't have enough
+        remaining = limit - len(results)
+        if remaining > 0 and self.sqlite_store is not None:
+            seen = {r.task_id for r in results}
+            sqlite_results = self.sqlite_store.list_by_task(
+                task_name,
+                limit=remaining,
+                before_ts=before_ts,
+                after_ts=after_ts,
+                exclude_ids=seen,
+            )
+            results.extend(sqlite_results)
+
+        return results
 
     def get_invocation(self, task_id: str) -> InvocationRecord | None:
         with self._lock:

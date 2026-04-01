@@ -181,13 +181,48 @@ class SQLiteStore:
                 break
         return results
 
-    def load_recovery_data(self, since_ts: float) -> Iterator[sqlite3.Row]:
+    def load_recovery_counts(self, since_ts: float) -> Iterator[sqlite3.Row]:
+        """Aggregated counts per task/state/minute for fast recovery."""
         cur = self._conn.cursor()
         cur.row_factory = sqlite3.Row
         cur.execute(
-            "SELECT task_name, state, finished_at, runtime_ms, worker, queue, "
-            "exception_type, received_at, started_at FROM invocations "
-            "WHERE finished_at >= ? ORDER BY task_name, finished_at",
+            "SELECT task_name, state, "
+            "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
+            "  COUNT(*) AS cnt, "
+            "  worker, queue, exception_type "
+            "FROM invocations WHERE finished_at >= ? "
+            "GROUP BY task_name, state, minute_ts, worker, queue, exception_type "
+            "ORDER BY task_name",
+            (since_ts,),
+        )
+        yield from cur
+
+    def load_recovery_runtimes(self, since_ts: float) -> Iterator[sqlite3.Row]:
+        """Stream individual runtime values for t-digest population."""
+        cur = self._conn.cursor()
+        cur.row_factory = sqlite3.Row
+        cur.execute(
+            "SELECT task_name, "
+            "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
+            "  runtime_ms "
+            "FROM invocations "
+            "WHERE finished_at >= ? AND runtime_ms IS NOT NULL "
+            "ORDER BY task_name",
+            (since_ts,),
+        )
+        yield from cur
+
+    def load_recovery_pickup(self, since_ts: float) -> Iterator[sqlite3.Row]:
+        """Stream received_at/started_at pairs for pickup latency rebuild."""
+        cur = self._conn.cursor()
+        cur.row_factory = sqlite3.Row
+        cur.execute(
+            "SELECT queue, (started_at - received_at) * 1000 AS wait_ms "
+            "FROM invocations "
+            "WHERE finished_at >= ? "
+            "  AND received_at IS NOT NULL AND started_at IS NOT NULL "
+            "  AND started_at > received_at "
+            "ORDER BY finished_at DESC LIMIT 5000",
             (since_ts,),
         )
         yield from cur

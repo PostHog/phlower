@@ -89,7 +89,7 @@ class CeleryEventConsumer:
                             try:
                                 self.registry.update(app)
                             except Exception:
-                                pass
+                                logger.debug("Inspect failed", exc_info=True)
                             last_inspect = now
             except Exception as exc:
                 self.connected = False

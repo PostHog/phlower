@@ -1,6 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   Chart as ChartJS,
@@ -102,7 +102,6 @@ export function TaskDetail() {
   const {
     data: invPages,
     fetchNextPage,
-    fetchPreviousPage,
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
@@ -140,12 +139,7 @@ export function TaskDetail() {
     return true;
   });
 
-  // SSE invocation_update triggers fetchPreviousPage to prepend new records
-  useEffect(() => {
-    const handler = () => fetchPreviousPage();
-    window.addEventListener("phlower:invocation_update", handler);
-    return () => window.removeEventListener("phlower:invocation_update", handler);
-  }, [fetchPreviousPage]);
+  // Invocation updates are handled by useSSE invalidating the query directly.
 
   const loadMore = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) fetchNextPage();

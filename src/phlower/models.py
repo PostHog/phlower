@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from tdigest import TDigest
+
 
 class TaskState(str, Enum):
     RECEIVED = "RECEIVED"
@@ -41,7 +43,7 @@ class MinuteBucket:
     success: int = 0
     failure: int = 0
     retry: int = 0
-    runtimes: list[float] = field(default_factory=list)
+    digest: TDigest | None = None  # runtime percentiles
 
 
 @dataclass

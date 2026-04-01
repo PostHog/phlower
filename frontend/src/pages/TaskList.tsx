@@ -73,8 +73,8 @@ export function TaskList() {
       },
       {
         id: "sparkline",
+        accessorFn: (row) => row.sparkline.reduce((a, b) => a + b, 0),
         header: "1 h",
-        enableSorting: false,
         meta: { className: "col-spark" },
         cell: ({ row }) => <Sparkline values={row.original.sparkline} />,
       },

@@ -13,7 +13,7 @@ async def meta(request: Request) -> dict:
     consumer = request.app.state.consumer
     store = request.app.state.store
     return {
-        "queues": consumer.registry.all_queues(),
+        "queues": sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
         "worker_groups": consumer.registry.all_groups(),
         "workers_seen": consumer.registry.worker_count(),
         "last_inspect_at": consumer.registry.last_inspect_at,

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from itertools import islice
 from typing import TYPE_CHECKING
 
+from tdigest import TDigest
+
 from .config import Config
 from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary
 
@@ -40,7 +42,7 @@ class CompletedRecord:
 # ---------------------------------------------------------------------------
 
 
-def percentile(sorted_values: list[float], p: float) -> float | None:
+def _percentile_sorted(sorted_values: list[float], p: float) -> float | None:
     """Compute *p*-th percentile from a pre-sorted list (linear interpolation)."""
     n = len(sorted_values)
     if n == 0:
@@ -59,21 +61,14 @@ def percentile(sorted_values: list[float], p: float) -> float | None:
 
 
 class TaskAggregate:
-    def __init__(
-        self,
-        task_name: str,
-        max_runtime_buffer: int,
-        max_runtimes_per_bucket: int,
-    ) -> None:
+    def __init__(self, task_name: str) -> None:
         self.task_name = task_name
         self.buckets: dict[int, MinuteBucket] = {}
         self.active_count: int = 0
-        self.runtime_buffer: deque[float] = deque(maxlen=max_runtime_buffer)
-        self._sorted_cache: list[float] | None = None
+        self.runtime_digest: TDigest = TDigest()
         self.exceptions: Counter[str] = Counter()
         self.workers: Counter[str] = Counter()
         self.queues: Counter[str] = Counter()
-        self._max_runtimes_per_bucket = max_runtimes_per_bucket
 
     # -- mutations --------------------------------------------------------
 
@@ -106,10 +101,10 @@ class TaskAggregate:
             bucket.retry += 1
 
         if runtime_ms is not None:
-            self.runtime_buffer.append(runtime_ms)
-            self._sorted_cache = None
-            if len(bucket.runtimes) < self._max_runtimes_per_bucket:
-                bucket.runtimes.append(runtime_ms)
+            self.runtime_digest.update(runtime_ms)
+            if bucket.digest is None:
+                bucket.digest = TDigest()
+            bucket.digest.update(runtime_ms)
 
         if worker:
             self.workers[worker] += 1
@@ -119,10 +114,10 @@ class TaskAggregate:
             self.exceptions[exception_type] += 1
 
     def thin_old_buckets(self, cutoff_minute_ts: int) -> None:
-        """Strip runtimes from buckets older than cutoff. Keeps counters."""
+        """Strip runtime digests from buckets older than cutoff. Keeps counters."""
         for ts, bucket in self.buckets.items():
-            if ts < cutoff_minute_ts and bucket.runtimes:
-                bucket.runtimes.clear()
+            if ts < cutoff_minute_ts and bucket.digest is not None:
+                bucket.digest = None
 
     def evict_old_buckets(self, cutoff_minute_ts: int) -> None:
         stale = [ts for ts in self.buckets if ts < cutoff_minute_ts]
@@ -149,9 +144,8 @@ class TaskAggregate:
             failure += b.failure
             retry += b.retry
 
-        if self._sorted_cache is None:
-            self._sorted_cache = sorted(self.runtime_buffer) if self.runtime_buffer else []
-        sr = self._sorted_cache
+        d = self.runtime_digest
+        has_data = len(d) > 0
 
         return TaskSummary(
             task_name=self.task_name,
@@ -161,9 +155,9 @@ class TaskAggregate:
             retry_count=retry,
             active_count=self.active_count,
             failure_rate=failure / total if total else 0.0,
-            p50_ms=percentile(sr, 50),
-            p95_ms=percentile(sr, 95),
-            p99_ms=percentile(sr, 99),
+            p50_ms=d.percentile(50) if has_data else None,
+            p95_ms=d.percentile(95) if has_data else None,
+            p99_ms=d.percentile(99) if has_data else None,
             rate_per_min=self._recent_rate(),
             top_exceptions=self.exceptions.most_common(10),
             top_workers=self.workers.most_common(10),
@@ -184,7 +178,8 @@ class TaskAggregate:
         out: list[dict] = []
         for ts in sorted(self.buckets):
             b = self.buckets[ts]
-            sr = sorted(b.runtimes) if b.runtimes else []
+            d = b.digest
+            has_data = d is not None and len(d) > 0
             out.append(
                 {
                     "t": ts,
@@ -192,9 +187,9 @@ class TaskAggregate:
                     "success": b.success,
                     "failure": b.failure,
                     "retry": b.retry,
-                    "p50": percentile(sr, 50),
-                    "p95": percentile(sr, 95),
-                    "p99": percentile(sr, 99),
+                    "p50": d.percentile(50) if has_data else None,
+                    "p95": d.percentile(95) if has_data else None,
+                    "p99": d.percentile(99) if has_data else None,
                     "failure_rate": b.failure / b.count if b.count else 0.0,
                 }
             )
@@ -282,11 +277,7 @@ class Store:
     def _get_or_create_task(self, task_name: str) -> TaskAggregate:
         agg = self.tasks.get(task_name)
         if agg is None:
-            agg = TaskAggregate(
-                task_name,
-                self.config.max_runtime_buffer,
-                self.config.max_runtimes_per_bucket,
-            )
+            agg = TaskAggregate(task_name)
             self.tasks[task_name] = agg
         return agg
 
@@ -585,7 +576,7 @@ class Store:
                 if q == "_global":
                     continue
                 sr = sorted(latencies) if latencies else []
-                result[q] = percentile(sr, 95)
+                result[q] = _percentile_sorted(sr, 95)
             return result
 
     # -- read methods (called from async handlers) ------------------------

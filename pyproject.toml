@@ -10,6 +10,7 @@ dependencies = [
     "jinja2>=3.1",
     "sse-starlette>=2.0",
     "python-multipart>=0.0.9",
+    "tdigest>=0.5.2",
 ]
 
 [project.scripts]

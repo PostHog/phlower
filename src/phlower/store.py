@@ -60,10 +60,14 @@ def _percentile_sorted(sorted_values: list[float], p: float) -> float | None:
 # ---------------------------------------------------------------------------
 
 
+DIGEST_HOT_WINDOW = 7200  # 2h — per-minute digests for recent data
+
+
 class TaskAggregate:
     def __init__(self, task_name: str) -> None:
         self.task_name = task_name
         self.buckets: dict[int, MinuteBucket] = {}
+        self.hourly_digests: dict[int, TDigest] = {}  # hour_ts → merged digest
         self.active_count: int = 0
         self.runtime_digest: TDigest = TDigest()
         self.exceptions: Counter[str] = Counter()
@@ -102,9 +106,12 @@ class TaskAggregate:
 
         if runtime_ms is not None:
             self.runtime_digest.update(runtime_ms)
-            if bucket.digest is None:
-                bucket.digest = TDigest()
-            bucket.digest.update(runtime_ms)
+            # Per-minute digests only in the hot window (last 2h).
+            # Older data uses merged hourly digests — see thin_old_buckets.
+            if ts > time.time() - DIGEST_HOT_WINDOW:
+                if bucket.digest is None:
+                    bucket.digest = TDigest()
+                bucket.digest.update(runtime_ms)
 
         if worker:
             self.workers[worker] += 1
@@ -114,15 +121,24 @@ class TaskAggregate:
             self.exceptions[exception_type] += 1
 
     def thin_old_buckets(self, cutoff_minute_ts: int) -> None:
-        """Strip runtime digests from buckets older than cutoff. Keeps counters."""
+        """Merge per-minute digests into hourly rollups, then discard them."""
         for ts, bucket in self.buckets.items():
             if ts < cutoff_minute_ts and bucket.digest is not None:
+                hour_ts = ts // 3600 * 3600
+                if hour_ts not in self.hourly_digests:
+                    self.hourly_digests[hour_ts] = TDigest()
+                self.hourly_digests[hour_ts].merge_inplace(bucket.digest)
                 bucket.digest = None
 
     def evict_old_buckets(self, cutoff_minute_ts: int) -> None:
         stale = [ts for ts in self.buckets if ts < cutoff_minute_ts]
         for ts in stale:
             del self.buckets[ts]
+        # Also evict hourly digests past the same cutoff
+        cutoff_hour = cutoff_minute_ts // 3600 * 3600
+        stale_hours = [ts for ts in self.hourly_digests if ts < cutoff_hour]
+        for ts in stale_hours:
+            del self.hourly_digests[ts]
 
     # -- reads ------------------------------------------------------------
 
@@ -182,7 +198,10 @@ class TaskAggregate:
         out: list[dict] = []
         for ts in sorted(self.buckets):
             b = self.buckets[ts]
+            # Per-minute digest (hot window) or hourly rollup (warm window)
             d = b.digest
+            if d is None:
+                d = self.hourly_digests.get(ts // 3600 * 3600)
             has_data = d is not None and len(d) > 0
             out.append(
                 {
@@ -510,12 +529,12 @@ class Store:
         agg_cutoff = now - self.config.aggregate_retention_hours * 3600
         agg_cutoff_minute = agg_cutoff // 60 * 60
 
-        thin_cutoff_minute = (inv_cutoff // 60) * 60
+        # Merge per-minute digests into hourly after 2h (hot → warm rollup)
+        digest_cutoff_minute = (now - DIGEST_HOT_WINDOW) // 60 * 60
 
         with self._lock:
             for agg in self.tasks.values():
-                # Strip runtimes from buckets older than 48h (saves ~4KB/bucket)
-                agg.thin_old_buckets(thin_cutoff_minute)
+                agg.thin_old_buckets(digest_cutoff_minute)
                 # Delete buckets older than 7 days entirely
                 agg.evict_old_buckets(agg_cutoff_minute)
 

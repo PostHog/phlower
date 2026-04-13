@@ -46,6 +46,17 @@ class MinuteBucket:
     digest: TDigest | None = None  # runtime percentiles
 
 
+@dataclass(slots=True)
+class HourBucket:
+    """Coarsened aggregate — minute buckets are merged into these after the hot window."""
+
+    timestamp: int  # epoch seconds, floored to hour
+    count: int = 0
+    success: int = 0
+    failure: int = 0
+    retry: int = 0
+
+
 @dataclass
 class TaskSummary:
     """Serialisable snapshot of a task's aggregate state."""

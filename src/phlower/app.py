@@ -157,9 +157,17 @@ async def lifespan(app: FastAPI):
     if config.sqlite_path:
         from .sqlite_store import SQLiteStore
 
-        sqlite_store = SQLiteStore(config.sqlite_path)
-        sqlite_store.init_schema()
-        logger.info("SQLite enabled at %s", config.sqlite_path)
+        try:
+            sqlite_store = SQLiteStore(config.sqlite_path)
+            sqlite_store.init_schema()
+            logger.info("SQLite enabled at %s", config.sqlite_path)
+        except Exception:
+            logger.exception(
+                "SQLite failed to open at %s — continuing without persistence. "
+                "Delete or move the DB file to recover.",
+                config.sqlite_path,
+            )
+            sqlite_store = None
 
         store = Store(config, sqlite_store=sqlite_store)
     else:

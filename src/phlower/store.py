@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from fastdigest import TDigest
 
 from .config import Config
-from .models import InvocationRecord, MinuteBucket, TaskState, TaskSummary
+from .models import HourBucket, InvocationRecord, MinuteBucket, TaskState, TaskSummary
 
 if TYPE_CHECKING:
     from .sqlite_store import SQLiteStore
@@ -68,6 +68,7 @@ class TaskAggregate:
         self.task_name = task_name
         self.buckets: dict[int, MinuteBucket] = {}
         self.hourly_digests: dict[int, TDigest] = {}  # hour_ts → merged digest
+        self.hourly_counts: dict[int, HourBucket] = {}  # hour_ts → coarsened counts
         self.active_count: int = 0
         self.runtime_digest: TDigest = TDigest()
         self.exceptions: Counter[str] = Counter()
@@ -120,25 +121,43 @@ class TaskAggregate:
         if exception_type:
             self.exceptions[exception_type] += 1
 
-    def thin_old_buckets(self, cutoff_minute_ts: int) -> None:
-        """Merge per-minute digests into hourly rollups, then discard them."""
-        for ts, bucket in self.buckets.items():
-            if ts < cutoff_minute_ts and bucket.digest is not None:
-                hour_ts = ts // 3600 * 3600
+    def coarsen_old_buckets(self, cutoff_minute_ts: int) -> None:
+        """Merge per-minute buckets into hourly rollups (digests + counts), then delete them."""
+        stale = [ts for ts in self.buckets if ts < cutoff_minute_ts]
+        for ts in stale:
+            bucket = self.buckets[ts]
+            hour_ts = ts // 3600 * 3600
+
+            # Merge digest into hourly
+            if bucket.digest is not None:
                 if hour_ts not in self.hourly_digests:
                     self.hourly_digests[hour_ts] = TDigest()
                 self.hourly_digests[hour_ts].merge_inplace(bucket.digest)
-                bucket.digest = None
+
+            # Merge counts into hourly
+            hb = self.hourly_counts.get(hour_ts)
+            if hb is None:
+                hb = HourBucket(timestamp=hour_ts)
+                self.hourly_counts[hour_ts] = hb
+            hb.count += bucket.count
+            hb.success += bucket.success
+            hb.failure += bucket.failure
+            hb.retry += bucket.retry
+
+            del self.buckets[ts]
 
     def evict_old_buckets(self, cutoff_minute_ts: int) -> None:
         stale = [ts for ts in self.buckets if ts < cutoff_minute_ts]
         for ts in stale:
             del self.buckets[ts]
-        # Also evict hourly digests past the same cutoff
+        # Also evict hourly rollups past the same cutoff
         cutoff_hour = cutoff_minute_ts // 3600 * 3600
         stale_hours = [ts for ts in self.hourly_digests if ts < cutoff_hour]
         for ts in stale_hours:
             del self.hourly_digests[ts]
+        stale_hours = [ts for ts in self.hourly_counts if ts < cutoff_hour]
+        for ts in stale_hours:
+            del self.hourly_counts[ts]
 
     # -- reads ------------------------------------------------------------
 
@@ -159,6 +178,11 @@ class TaskAggregate:
             success += b.success
             failure += b.failure
             retry += b.retry
+        for hb in self.hourly_counts.values():
+            total += hb.count
+            success += hb.success
+            failure += hb.failure
+            retry += hb.retry
 
         d = self.runtime_digest
         has_data = len(d) > 0
@@ -194,14 +218,35 @@ class TaskAggregate:
         ]
 
     def latency_series(self) -> list[dict]:
-        """Per-minute latency + throughput data suitable for charting."""
+        """Latency + throughput data suitable for charting.
+
+        Returns per-minute points for the hot window, hourly points for older data.
+        """
         out: list[dict] = []
+
+        # Hourly rollups (older data)
+        for ts in sorted(self.hourly_counts):
+            hb = self.hourly_counts[ts]
+            d = self.hourly_digests.get(ts)
+            has_data = d is not None and len(d) > 0
+            out.append(
+                {
+                    "t": ts,
+                    "count": hb.count,
+                    "success": hb.success,
+                    "failure": hb.failure,
+                    "retry": hb.retry,
+                    "p50": d.percentile(50) if has_data else None,
+                    "p95": d.percentile(95) if has_data else None,
+                    "p99": d.percentile(99) if has_data else None,
+                    "failure_rate": hb.failure / hb.count if hb.count else 0.0,
+                }
+            )
+
+        # Per-minute buckets (hot window)
         for ts in sorted(self.buckets):
             b = self.buckets[ts]
-            # Per-minute digest (hot window) or hourly rollup (warm window)
             d = b.digest
-            if d is None:
-                d = self.hourly_digests.get(ts // 3600 * 3600)
             has_data = d is not None and len(d) > 0
             out.append(
                 {
@@ -216,6 +261,7 @@ class TaskAggregate:
                     "failure_rate": b.failure / b.count if b.count else 0.0,
                 }
             )
+
         return out
 
 
@@ -489,6 +535,9 @@ class Store:
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._sqlite_pending.append(self._snapshot(rec))
+            # Heavy fields persisted to SQLite — free from memory
+            rec.traceback_snippet = None
+            rec.exception_message = None
 
     def process_retried(
         self,
@@ -520,6 +569,9 @@ class Store:
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._sqlite_pending.append(self._snapshot(rec))
+            # Heavy fields persisted to SQLite — free from memory
+            rec.traceback_snippet = None
+            rec.exception_message = None
 
     # -- periodic maintenance ---------------------------------------------
 
@@ -529,13 +581,13 @@ class Store:
         agg_cutoff = now - self.config.aggregate_retention_hours * 3600
         agg_cutoff_minute = agg_cutoff // 60 * 60
 
-        # Merge per-minute digests into hourly after 2h (hot → warm rollup)
-        digest_cutoff_minute = (now - DIGEST_HOT_WINDOW) // 60 * 60
+        # Coarsen per-minute buckets into hourly after 2h (hot → warm rollup)
+        coarsen_cutoff_minute = (now - DIGEST_HOT_WINDOW) // 60 * 60
 
         with self._lock:
             for agg in self.tasks.values():
-                agg.thin_old_buckets(digest_cutoff_minute)
-                # Delete buckets older than 7 days entirely
+                agg.coarsen_old_buckets(coarsen_cutoff_minute)
+                # Delete hourly rollups older than 7 days entirely
                 agg.evict_old_buckets(agg_cutoff_minute)
 
             # Invocations: shorter retention (default 48h)
@@ -673,6 +725,12 @@ class Store:
         with self._lock:
             rec = self.invocations.get(task_id)
         if rec is not None:
+            # Enrich with traceback from SQLite if stripped from memory
+            if rec.traceback_snippet is None and self.sqlite_store is not None:
+                sqlite_rec = self.sqlite_store.lookup_task_id(task_id)
+                if sqlite_rec is not None:
+                    rec.traceback_snippet = sqlite_rec.traceback_snippet
+                    rec.exception_message = sqlite_rec.exception_message
             return rec
         if self.sqlite_store is not None:
             return self.sqlite_store.lookup_task_id(task_id)

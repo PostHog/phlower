@@ -22,7 +22,12 @@ function AppShell() {
   return (
     <>
       <nav className="topbar">
-        <Link to="/" className="logo">Phlower</Link>
+        <Link to="/" className="logo">
+          <span className="logo-p">P</span>
+          <span className="logo-h">h</span>
+          <span className="logo-l">l</span>
+          ower
+        </Link>
         <div className="nav-links">
           <Link to="/">Tasks</Link>
           <Link to="/search">Search</Link>

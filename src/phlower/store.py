@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import gc
+import logging
+import platform
 import threading
 import time
 from collections import Counter, defaultdict, deque
@@ -16,6 +20,30 @@ from .models import HourBucket, InvocationRecord, MinuteBucket, TaskState, TaskS
 
 if TYPE_CHECKING:
     from .sqlite_store import SQLiteStore
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# glibc malloc_trim — return freed pages to the OS
+# ---------------------------------------------------------------------------
+
+_malloc_trim = None
+if platform.system() == "Linux":
+    try:
+        _libc = ctypes.CDLL("libc.so.6")
+        _malloc_trim = _libc.malloc_trim
+        _malloc_trim.argtypes = [ctypes.c_size_t]
+        _malloc_trim.restype = ctypes.c_int
+    except OSError:
+        pass
+
+
+def release_memory() -> None:
+    """Run gc.collect() then ask glibc to return freed pages to the OS."""
+    gc.collect()
+    if _malloc_trim is not None:
+        _malloc_trim(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,6 +631,8 @@ class Store:
                     self.invocations.pop(task_id, None)
                 else:
                     break
+
+        release_memory()
 
     # -- SSE dirty tracking -----------------------------------------------
 

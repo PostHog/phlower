@@ -59,6 +59,7 @@ WHERE rowid IN (
 class SQLiteStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        self._cached_row_count: int = 0
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
 
@@ -239,7 +240,9 @@ class SQLiteStore:
 
     def row_count(self) -> int:
         row = self._conn.execute("SELECT count(*) FROM invocations").fetchone()
-        return row[0] if row else 0
+        count = row[0] if row else 0
+        self._cached_row_count = count
+        return count
 
     def db_size_mb(self) -> float:
         """Approximate DB file size in MB."""

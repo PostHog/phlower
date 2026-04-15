@@ -37,7 +37,7 @@ async def stats(request: Request) -> StatsResponse:
         uptime_sec=round(uptime),
         retention_sec=retention,
         broker_connected=request.app.state.consumer.connected,
-        sqlite_rows=sqlite_store.row_count() if sqlite_store else None,
+        sqlite_rows=sqlite_store._cached_row_count if sqlite_store else None,
     )
 
 
@@ -53,7 +53,7 @@ async def healthz(request: Request) -> HealthResponse:
         broker_reconnects=consumer.reconnect_count,
         tasks_tracked=len(store.tasks),
         invocations_stored=len(store.invocations),
-        sqlite_rows=sqlite_store.row_count() if sqlite_store else None,
+        sqlite_rows=sqlite_store._cached_row_count if sqlite_store else None,
         sse_clients=request.app.state.broadcaster.client_count,
         queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
         worker_groups=consumer.registry.all_groups(),

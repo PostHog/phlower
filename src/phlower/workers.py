@@ -105,4 +105,19 @@ class WorkerRegistry:
 
     def worker_count(self) -> int:
         with self._lock:
-            return len(self._worker_queues)
+            return sum(1 for k in self._worker_queues if not k.startswith("_seed"))
+
+    def seed(self, queues: list[str], groups: list[str]) -> None:
+        """Pre-populate from persisted metadata so pills appear on startup."""
+        with self._lock:
+            # Use a synthetic hostname so these don't collide with real workers.
+            # Real inspect results will overwrite with actual worker→queue mappings.
+            if queues and "_seed" not in self._worker_queues:
+                self._worker_queues["_seed"] = queues
+            for group in groups:
+                if group not in self._worker_groups.values():
+                    self._worker_groups[f"_seed_{group}"] = group
+
+    def snapshot(self) -> tuple[list[str], list[str]]:
+        """Return (queues, groups) for persistence."""
+        return self.all_queues(), self.all_groups()

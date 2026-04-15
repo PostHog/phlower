@@ -20,10 +20,11 @@ INSPECT_INTERVAL = 60  # seconds
 
 
 class CeleryEventConsumer:
-    def __init__(self, config: Config, store: Store) -> None:
+    def __init__(self, config: Config, store: Store, sqlite_store=None) -> None:
         self.config = config
         self.store = store
         self.registry = WorkerRegistry()
+        self._sqlite_store = sqlite_store
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.connected: bool = False
@@ -103,6 +104,33 @@ class CeleryEventConsumer:
                     self.reconnect_count, delay, exc,
                 )
                 self._stop.wait(delay)
+
+    def seed_registry_from_sqlite(self) -> None:
+        """Pre-populate the worker registry from persisted metadata."""
+        if not self._sqlite_store:
+            return
+        try:
+            queues = self._sqlite_store.load_metadata("queues")
+            groups = self._sqlite_store.load_metadata("worker_groups")
+            if queues or groups:
+                self.registry.seed(queues, groups)
+                logger.info(
+                    "Registry seeded from SQLite: %d queues, %d groups",
+                    len(queues), len(groups),
+                )
+        except Exception:
+            logger.debug("Failed to seed registry from SQLite", exc_info=True)
+
+    def _persist_metadata(self) -> None:
+        """Save current queue/group lists to SQLite for fast recovery."""
+        if not self._sqlite_store:
+            return
+        try:
+            queues, groups = self.registry.snapshot()
+            self._sqlite_store.save_metadata("queues", queues)
+            self._sqlite_store.save_metadata("worker_groups", groups)
+        except Exception:
+            logger.debug("Failed to persist registry metadata", exc_info=True)
 
     # -- queue enrichment -------------------------------------------------
 

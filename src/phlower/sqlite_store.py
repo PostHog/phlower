@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS invocations (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_finished ON invocations (finished_at);
 CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished_at);
+
+CREATE TABLE IF NOT EXISTS metadata (
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (key, value)
+);
 """
 
 UPSERT_SQL = """
@@ -242,6 +248,26 @@ class SQLiteStore:
         row = self._conn.execute("PRAGMA page_size").fetchone()
         page_size = row[0] if row else 4096
         return (pages * page_size) / (1024 * 1024)
+
+    # -- metadata persistence -----------------------------------------------
+
+    def save_metadata(self, key: str, values: list[str]) -> None:
+        """Replace all values for a metadata key."""
+        self._conn.execute("DELETE FROM metadata WHERE key = ?", (key,))
+        if values:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)",
+                [(key, v) for v in values],
+            )
+        self._conn.commit()
+
+    def load_metadata(self, key: str) -> list[str]:
+        """Load all values for a metadata key."""
+        rows = self._conn.execute(
+            "SELECT value FROM metadata WHERE key = ? ORDER BY value",
+            (key,),
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def close(self) -> None:
         self._conn.close()

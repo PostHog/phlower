@@ -178,6 +178,8 @@ class MetaResponse(BaseModel):
     workers_seen: int
     last_inspect_at: float
     pickup_latency_p95: dict[str, float | None]
+    workers_per_queue: dict[str, int]
+    workers_per_group: dict[str, int]
 
 
 class StatsResponse(BaseModel):

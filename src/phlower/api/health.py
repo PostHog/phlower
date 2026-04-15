@@ -19,6 +19,8 @@ async def meta(request: Request) -> MetaResponse:
         workers_seen=consumer.registry.worker_count(),
         last_inspect_at=consumer.registry.last_inspect_at,
         pickup_latency_p95=store.pickup_latency_by_queue(),
+        workers_per_queue=consumer.registry.workers_per_queue(),
+        workers_per_group=consumer.registry.workers_per_group(),
     )
 
 

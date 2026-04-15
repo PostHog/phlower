@@ -107,6 +107,27 @@ class WorkerRegistry:
         with self._lock:
             return sum(1 for k in self._worker_queues if not k.startswith("_seed"))
 
+    def workers_per_queue(self) -> dict[str, int]:
+        """Count of live workers consuming each queue."""
+        with self._lock:
+            counts: dict[str, int] = {}
+            for hostname, queues in self._worker_queues.items():
+                if hostname.startswith("_seed"):
+                    continue
+                for q in queues:
+                    counts[q] = counts.get(q, 0) + 1
+            return counts
+
+    def workers_per_group(self) -> dict[str, int]:
+        """Count of live workers in each worker group."""
+        with self._lock:
+            counts: dict[str, int] = {}
+            for hostname, group in self._worker_groups.items():
+                if hostname.startswith("_seed"):
+                    continue
+                counts[group] = counts.get(group, 0) + 1
+            return counts
+
     def seed(self, queues: list[str], groups: list[str]) -> None:
         """Pre-populate from persisted metadata so pills appear on startup."""
         with self._lock:

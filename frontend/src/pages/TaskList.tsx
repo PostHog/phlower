@@ -151,6 +151,7 @@ export function TaskList() {
                   onClick={() => setQueueFilter(q)}
                   sparkline={queueSparklines[q]}
                   waitMs={meta.pickup_latency_p95?.[q]}
+                  workerCount={meta.workers_per_queue?.[q]}
                 />
               ))}
             </div>
@@ -160,7 +161,7 @@ export function TaskList() {
               <span className="filter-label">Worker</span>
               <FilterPill label="All" active={groupFilter === ""} onClick={() => setGroupFilter("")} />
               {meta.worker_groups.map((g) => (
-                <FilterPill key={g} label={g} active={groupFilter === g} onClick={() => setGroupFilter(g)} />
+                <FilterPill key={g} label={g} active={groupFilter === g} onClick={() => setGroupFilter(g)} workerCount={meta.workers_per_group?.[g]} />
               ))}
             </div>
           )}
@@ -193,12 +194,14 @@ function FilterPill({
   onClick,
   sparkline,
   waitMs,
+  workerCount,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   sparkline?: number[];
   waitMs?: number | null;
+  workerCount?: number;
 }) {
   const waitClass =
     waitMs != null && waitMs > 5000
@@ -216,6 +219,9 @@ function FilterPill({
         <Sparkline values={sparkline} width={40} height={14} />
       )}
       <span>{label}</span>
+      {workerCount != null && workerCount > 0 && (
+        <span className="pill-worker-count" title={`${workerCount} worker${workerCount !== 1 ? "s" : ""}`}>{workerCount}</span>
+      )}
       {waitMs != null && (
         <span className="pill-wait">{fmtMs(waitMs)}</span>
       )}

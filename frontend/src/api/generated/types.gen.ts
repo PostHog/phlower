@@ -216,6 +216,18 @@ export type MetaResponse = {
     pickup_latency_p95: {
         [key: string]: number | null;
     };
+    /**
+     * Workers Per Queue
+     */
+    workers_per_queue: {
+        [key: string]: number;
+    };
+    /**
+     * Workers Per Group
+     */
+    workers_per_group: {
+        [key: string]: number;
+    };
 };
 
 /**

@@ -773,6 +773,18 @@ class Store:
                 queues.update(agg.queues.keys())
             return sorted(queues)
 
+    def get_known_queues_nonblocking(self) -> list[str]:
+        """Non-blocking variant for health endpoints. Returns [] if lock is contended."""
+        if not self._lock.acquire(blocking=False):
+            return []
+        try:
+            queues: set[str] = set()
+            for agg in self.tasks.values():
+                queues.update(agg.queues.keys())
+            return sorted(queues)
+        finally:
+            self._lock.release()
+
     def get_known_workers(self) -> list[str]:
         with self._lock:
             workers: set[str] = set()

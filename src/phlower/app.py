@@ -144,7 +144,9 @@ async def _sqlite_purge_loop(sqlite_store, config: Config, consumer=None) -> Non
         if consumer:
             consumer._persist_metadata()
 
-        logger.info("SQLite: %.1f MB, %d rows", sqlite_store.db_size_mb(), sqlite_store.row_count())
+        size_mb = await loop.run_in_executor(None, sqlite_store.db_size_mb)
+        row_ct = await loop.run_in_executor(None, sqlite_store.row_count)
+        logger.info("SQLite: %.1f MB, %d rows", size_mb, row_ct)
 
 
 # ---------------------------------------------------------------------------

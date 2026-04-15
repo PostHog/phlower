@@ -14,7 +14,7 @@ async def meta(request: Request) -> MetaResponse:
     consumer = request.app.state.consumer
     store = request.app.state.store
     return MetaResponse(
-        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
+        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues_nonblocking())),
         worker_groups=consumer.registry.all_groups(),
         workers_seen=consumer.registry.worker_count(),
         last_inspect_at=consumer.registry.last_inspect_at,
@@ -55,7 +55,7 @@ async def healthz(request: Request) -> HealthResponse:
         invocations_stored=len(store.invocations),
         sqlite_rows=sqlite_store._cached_row_count if sqlite_store else None,
         sse_clients=request.app.state.broadcaster.client_count,
-        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
+        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues_nonblocking())),
         worker_groups=consumer.registry.all_groups(),
         workers_seen=consumer.registry.worker_count(),
     )

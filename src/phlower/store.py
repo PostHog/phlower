@@ -792,6 +792,17 @@ class Store:
             return self.sqlite_store.lookup_task_id(task_id)
         return None
 
+    def get_known_queues_nonblocking(self) -> list[str]:
+        """Non-blocking variant for health endpoints. Returns [] if lock is contended."""
+        if not self._lock.acquire(blocking=False):
+            return []
+        try:
+            queues: set[str] = set()
+            for agg in self.tasks.values():
+                queues.update(agg.queues.keys())
+            return sorted(queues)
+        finally:
+            self._lock.release()
 
     def search_invocations(
         self,

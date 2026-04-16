@@ -61,8 +61,14 @@ const invocationColumns: ColumnDef<InvocationRecord, unknown>[] = [
     ),
   },
   {
+    accessorKey: "worker_group",
+    header: "Group",
+    meta: { className: "mono small" },
+    cell: ({ row }) => row.original.worker_group || "\u2014",
+  },
+  {
     accessorKey: "worker",
-    header: "Worker",
+    header: "Instance",
     meta: { className: "mono small" },
     cell: ({ row }) => row.original.worker || "\u2014",
   },

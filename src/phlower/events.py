@@ -91,6 +91,9 @@ class CeleryEventConsumer:
                                 self.registry.update(app)
                             except Exception:
                                 logger.debug("Inspect failed", exc_info=True)
+                            # Always evict stale pods/workers/queues,
+                            # even when inspect itself failed.
+                            self.registry.evict_stale()
                             last_inspect = now
             except Exception as exc:
                 self.connected = False
@@ -137,6 +140,7 @@ class CeleryEventConsumer:
     def _resolve_queue(self, event: dict) -> str | None:
         queue = event.get("queue") or event.get("routing_key")
         if queue:
+            self.registry.note_queue(queue)
             return queue
         hostname = event.get("hostname")
         if hostname:
@@ -154,6 +158,8 @@ class CeleryEventConsumer:
 
     def _on_received(self, event: dict) -> None:
         queue = event.get("queue") or event.get("routing_key")
+        if queue:
+            self.registry.note_queue(queue)
         self.store.process_received(
             task_id=event["uuid"],
             task_name=event.get("name", "unknown"),

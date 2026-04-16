@@ -13,14 +13,15 @@ router = APIRouter()
 async def meta(request: Request) -> MetaResponse:
     consumer = request.app.state.consumer
     store = request.app.state.store
+    registry = consumer.registry
     return MetaResponse(
-        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
-        worker_groups=consumer.registry.all_groups(),
-        workers_seen=consumer.registry.worker_count(),
-        last_inspect_at=consumer.registry.last_inspect_at,
+        queues=registry.all_queues(),
+        worker_groups=registry.all_groups(),
+        workers_seen=registry.worker_count(),
+        last_inspect_at=registry.last_inspect_at,
         pickup_latency_p95=store.pickup_latency_by_queue(),
-        workers_per_queue=consumer.registry.workers_per_queue(),
-        workers_per_group=consumer.registry.workers_per_group(),
+        workers_per_queue=registry.workers_per_queue(),
+        workers_per_group=registry.workers_per_group(),
     )
 
 
@@ -55,7 +56,7 @@ async def healthz(request: Request) -> HealthResponse:
         invocations_stored=len(store.invocations),
         sqlite_rows=sqlite_store.row_count() if sqlite_store else None,
         sse_clients=request.app.state.broadcaster.client_count,
-        queues=sorted(set(consumer.registry.all_queues()) | set(store.get_known_queues())),
+        queues=consumer.registry.all_queues(),
         worker_groups=consumer.registry.all_groups(),
         workers_seen=consumer.registry.worker_count(),
     )

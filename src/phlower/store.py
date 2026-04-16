@@ -99,9 +99,10 @@ class TaskAggregate:
         self.hourly_counts: dict[int, HourBucket] = {}  # hour_ts → coarsened counts
         self.active_count: int = 0
         self.runtime_digest: TDigest = TDigest()
-        self.exceptions: Counter[str] = Counter()
-        self.workers: Counter[str] = Counter()
-        self.queues: Counter[str] = Counter()
+        # Attribution counters — hourly-bucketed so old hours evict with data.
+        self.hourly_exceptions: dict[int, Counter[str]] = {}
+        self.hourly_workers: dict[int, Counter[str]] = {}
+        self.hourly_queues: dict[int, Counter[str]] = {}
 
     # -- mutations --------------------------------------------------------
 
@@ -112,6 +113,15 @@ class TaskAggregate:
             bucket = MinuteBucket(timestamp=minute_ts)
             self.buckets[minute_ts] = bucket
         return bucket
+
+    def _hourly_counter(
+        self, store: dict[int, Counter[str]], hour_ts: int,
+    ) -> Counter[str]:
+        c = store.get(hour_ts)
+        if c is None:
+            c = Counter()
+            store[hour_ts] = c
+        return c
 
     def record_terminal_event(
         self,
@@ -142,12 +152,13 @@ class TaskAggregate:
                     bucket.digest = TDigest()
                 bucket.digest.update(runtime_ms)
 
+        hour_ts = int(ts) // 3600 * 3600
         if worker:
-            self.workers[worker] += 1
+            self._hourly_counter(self.hourly_workers, hour_ts)[worker] += 1
         if queue:
-            self.queues[queue] += 1
+            self._hourly_counter(self.hourly_queues, hour_ts)[queue] += 1
         if exception_type:
-            self.exceptions[exception_type] += 1
+            self._hourly_counter(self.hourly_exceptions, hour_ts)[exception_type] += 1
 
     def coarsen_old_buckets(self, cutoff_minute_ts: int) -> None:
         """Merge per-minute buckets into hourly rollups (digests + counts), then delete them."""
@@ -180,12 +191,16 @@ class TaskAggregate:
             del self.buckets[ts]
         # Also evict hourly rollups past the same cutoff
         cutoff_hour = cutoff_minute_ts // 3600 * 3600
-        stale_hours = [ts for ts in self.hourly_digests if ts < cutoff_hour]
-        for ts in stale_hours:
-            del self.hourly_digests[ts]
-        stale_hours = [ts for ts in self.hourly_counts if ts < cutoff_hour]
-        for ts in stale_hours:
-            del self.hourly_counts[ts]
+        for hourly_dict in (
+            self.hourly_digests,
+            self.hourly_counts,
+            self.hourly_workers,
+            self.hourly_queues,
+            self.hourly_exceptions,
+        ):
+            stale_hours = [ts for ts in hourly_dict if ts < cutoff_hour]
+            for ts in stale_hours:
+                del hourly_dict[ts]
 
     # -- reads ------------------------------------------------------------
 
@@ -215,6 +230,17 @@ class TaskAggregate:
         d = self.runtime_digest
         has_data = len(d) > 0
 
+        # Merge hourly attribution counters
+        exceptions: Counter[str] = Counter()
+        workers: Counter[str] = Counter()
+        queues: Counter[str] = Counter()
+        for c in self.hourly_exceptions.values():
+            exceptions += c
+        for c in self.hourly_workers.values():
+            workers += c
+        for c in self.hourly_queues.values():
+            queues += c
+
         return TaskSummary(
             task_name=self.task_name,
             total_count=total,
@@ -231,9 +257,9 @@ class TaskAggregate:
             max_ms=d.max() if has_data else None,
             std_ms=d.std() if has_data else None,
             rate_per_min=self._recent_rate(),
-            top_exceptions=self.exceptions.most_common(10),
-            top_workers=self.workers.most_common(10),
-            top_queues=self.queues.most_common(10),
+            top_exceptions=exceptions.most_common(10),
+            top_workers=workers.most_common(10),
+            top_queues=queues.most_common(10),
             sparkline=self.sparkline(),
         )
 
@@ -766,19 +792,6 @@ class Store:
             return self.sqlite_store.lookup_task_id(task_id)
         return None
 
-    def get_known_queues(self) -> list[str]:
-        with self._lock:
-            queues: set[str] = set()
-            for agg in self.tasks.values():
-                queues.update(agg.queues.keys())
-            return sorted(queues)
-
-    def get_known_workers(self) -> list[str]:
-        with self._lock:
-            workers: set[str] = set()
-            for agg in self.tasks.values():
-                workers.update(agg.workers.keys())
-            return sorted(workers)
 
     def search_invocations(
         self,

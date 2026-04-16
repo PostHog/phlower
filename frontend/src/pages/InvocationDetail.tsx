@@ -61,7 +61,8 @@ export function InvocationDetail() {
               <LifecycleRow label="Started" ts={inv.started_at} state={transitionMap.has("STARTED") ? "STARTED" : undefined} />
               <LifecycleRow label="Finished" ts={inv.finished_at} state={inv.state !== "RECEIVED" && inv.state !== "STARTED" ? inv.state : undefined} />
               <tr><td>Runtime</td><td>{fmtMs(inv.runtime_ms)}</td></tr>
-              <tr><td>Worker</td><td className="mono">{inv.worker || "\u2014"}</td></tr>
+              <tr><td>Worker group</td><td className="mono">{inv.worker_group || "\u2014"}</td></tr>
+              <tr><td>Instance</td><td className="mono">{inv.worker || "\u2014"}</td></tr>
               <tr><td>Queue</td><td className="mono">{inv.queue || "\u2014"}</td></tr>
               {inv.retries > 0 && <tr><td>Retries</td><td>{inv.retries}</td></tr>}
             </tbody>

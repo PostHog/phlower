@@ -115,6 +115,10 @@ export type InvocationResponse = {
      */
     worker: string | null;
     /**
+     * Worker Group
+     */
+    worker_group: string | null;
+    /**
      * Queue
      */
     queue: string | null;

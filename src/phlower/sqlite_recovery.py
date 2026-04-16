@@ -102,12 +102,13 @@ def _flush_counts(store: Store, batch: list[tuple]) -> None:
             elif state == TaskState.RETRY:
                 bucket.retry += cnt
 
+            hour_ts = minute_ts // 3600 * 3600
             if worker:
-                agg.workers[worker] += cnt
+                agg._hourly_counter(agg.hourly_workers, hour_ts)[worker] += cnt
             if queue:
-                agg.queues[queue] += cnt
+                agg._hourly_counter(agg.hourly_queues, hour_ts)[queue] += cnt
             if exception_type:
-                agg.exceptions[exception_type] += cnt
+                agg._hourly_counter(agg.hourly_exceptions, hour_ts)[exception_type] += cnt
 
 
 def _load_runtimes(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:

@@ -125,6 +125,7 @@ class InvocationResponse(BaseModel):
     finished_at: float | None
     runtime_ms: float | None
     worker: str | None
+    worker_group: str | None
     queue: str | None
     args_preview: str | None
     kwargs_preview: str | None
@@ -145,6 +146,7 @@ class InvocationResponse(BaseModel):
             finished_at=r.finished_at,
             runtime_ms=r.runtime_ms,
             worker=r.worker,
+            worker_group=r.worker_group,
             queue=r.queue,
             args_preview=r.args_preview,
             kwargs_preview=r.kwargs_preview,

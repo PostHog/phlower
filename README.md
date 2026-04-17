@@ -38,10 +38,13 @@ Everything updates live via SSE with ~300ms latency. React frontend with TanStac
 
 ## Auto-discovery
 
-Phlower periodically runs `celery inspect` to automatically discover:
-- **Worker groups** — extracts consumer type from K8s pod hostnames (e.g. `posthog-worker-django-analytics-queries-abc123` → `analytics-queries`)
-- **Queue mapping** — which queues each worker consumes
-- **Pickup latency** — p95 wait time per queue, shown in filter pills
+Phlower tracks three distinct entities with independent lifecycles:
+
+- **Queue** — a routing destination (e.g. `celery`, `analytics`). Discovered from `celery inspect` and from live task events. Long-lived: stays visible for 24 hours after last signal, since queues are defined in code and shouldn't flicker.
+- **Worker** — a logical group of instances derived from hostnames (e.g. `posthog-worker-django-analytics-queries-abc123` → `analytics-queries`). Also stays visible for 24 hours — rolling deploys and brief scale-downs shouldn't cause groups to disappear.
+- **Instance** — an individual Celery worker process. Short-lived: evicted after 3 minutes without an inspect response. Instance count is what the number badges on filter pills show.
+
+Periodic `celery inspect` (every 60s) refreshes pod/queue/worker state. Task events also feed queue names into the registry, so a queue becomes visible as soon as a task is routed to it — no need to wait for the next inspect cycle. Pickup latency (p95 wait time per queue) is shown in filter pills.
 
 No configuration needed for any of this.
 

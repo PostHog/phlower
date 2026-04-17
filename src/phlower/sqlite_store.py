@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -68,12 +69,18 @@ class SQLiteStore:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
+        # Cap WAL file size after successful checkpoint — prevents the file
+        # from staying at its high-water mark forever after a growth spike.
+        conn.execute("PRAGMA journal_size_limit=67108864")  # 64 MB
         return conn
 
     def init_schema(self) -> None:
         self._conn.executescript(SCHEMA)
-        # Add columns if upgrading from older schema
         self._migrate()
+        # Checkpoint any WAL inherited from a crash — this must happen before
+        # recovery opens its read connection, otherwise the stale WAL blocks
+        # checkpointing for the entire recovery duration.
+        self.checkpoint(truncate=True)
 
     def _migrate(self) -> None:
         """Add columns that may not exist in older databases."""
@@ -193,35 +200,58 @@ class SQLiteStore:
         return self._connect(self.db_path)
 
     def load_recovery_counts(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
-        """Aggregated counts per task/state/minute for fast recovery."""
-        cur = conn.cursor()
-        cur.row_factory = sqlite3.Row
-        cur.execute(
-            "SELECT task_name, state, "
-            "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
-            "  COUNT(*) AS cnt, "
-            "  worker, queue, exception_type "
-            "FROM invocations WHERE finished_at >= ? "
-            "GROUP BY task_name, state, minute_ts, worker, queue, exception_type "
-            "ORDER BY task_name",
-            (since_ts,),
-        )
-        yield from cur
+        """Aggregated counts per task/state/minute for fast recovery.
+
+        Processes in 4-hour chunks so the read lock is released between
+        chunks, allowing WAL checkpointing to proceed.
+        """
+        now = time.time()
+        chunk_start = since_ts
+        while chunk_start < now:
+            chunk_end = min(chunk_start + 14400, now + 1)  # 4-hour windows
+            cur = conn.cursor()
+            cur.row_factory = sqlite3.Row
+            cur.execute(
+                "SELECT task_name, state, "
+                "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
+                "  COUNT(*) AS cnt, "
+                "  worker, queue, exception_type "
+                "FROM invocations WHERE finished_at >= ? AND finished_at < ? "
+                "GROUP BY task_name, state, minute_ts, worker, queue, exception_type "
+                "ORDER BY task_name",
+                (chunk_start, chunk_end),
+            )
+            yield from cur
+            cur.close()
+            # Explicit commit releases any read snapshot Python's sqlite3
+            # module may hold, allowing WAL checkpointing to proceed.
+            conn.commit()
+            chunk_start = chunk_end
 
     def load_recovery_runtimes(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
-        """Stream individual runtime values for t-digest population."""
-        cur = conn.cursor()
-        cur.row_factory = sqlite3.Row
-        cur.execute(
-            "SELECT task_name, "
-            "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
-            "  runtime_ms "
-            "FROM invocations "
-            "WHERE finished_at >= ? AND runtime_ms IS NOT NULL "
-            "ORDER BY task_name",
-            (since_ts,),
-        )
-        yield from cur
+        """Stream individual runtime values for t-digest population.
+
+        Chunked in 4-hour windows to release read locks periodically.
+        """
+        now = time.time()
+        chunk_start = since_ts
+        while chunk_start < now:
+            chunk_end = min(chunk_start + 14400, now + 1)
+            cur = conn.cursor()
+            cur.row_factory = sqlite3.Row
+            cur.execute(
+                "SELECT task_name, "
+                "  (CAST(finished_at AS INTEGER) / 60 * 60) AS minute_ts, "
+                "  runtime_ms "
+                "FROM invocations "
+                "WHERE finished_at >= ? AND finished_at < ? AND runtime_ms IS NOT NULL "
+                "ORDER BY task_name",
+                (chunk_start, chunk_end),
+            )
+            yield from cur
+            cur.close()
+            conn.commit()
+            chunk_start = chunk_end
 
     def load_recovery_pickup(self, conn: sqlite3.Connection, since_ts: float) -> Iterator[sqlite3.Row]:
         """Stream received_at/started_at pairs for pickup latency rebuild."""
@@ -273,7 +303,44 @@ class SQLiteStore:
         return [r[0] for r in rows]
 
     def close(self) -> None:
+        self.checkpoint(truncate=True)
         self._conn.close()
+
+    # -- WAL management -----------------------------------------------------
+
+    def checkpoint(self, *, truncate: bool = False) -> None:
+        """Force WAL checkpoint.
+
+        truncate=True: TRUNCATE mode — merges all WAL frames, waits for
+        readers, then truncates the file to zero. Use on startup/shutdown
+        when there are no concurrent readers; blocks writers while waiting.
+
+        truncate=False (default): PASSIVE mode — checkpoints as many frames
+        as possible without blocking readers or writers. Safe to call any
+        time during normal operation.
+        """
+        mode = "TRUNCATE" if truncate else "PASSIVE"
+        try:
+            row = self._conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+            if row:
+                busy, log_frames, checkpointed = row
+                if busy:
+                    logger.info(
+                        "WAL checkpoint (%s) partial: %d/%d frames",
+                        mode.lower(), checkpointed, log_frames,
+                    )
+                elif log_frames:
+                    logger.info("WAL checkpoint (%s): %d frames", mode.lower(), checkpointed)
+        except Exception:
+            logger.exception("WAL checkpoint failed")
+
+    def wal_size_mb(self) -> float:
+        """WAL file size in MB (from filesystem)."""
+        wal_path = Path(self.db_path + "-wal")
+        try:
+            return wal_path.stat().st_size / (1024 * 1024) if wal_path.exists() else 0.0
+        except OSError:
+            return 0.0
 
     # -- helpers ----------------------------------------------------------
 

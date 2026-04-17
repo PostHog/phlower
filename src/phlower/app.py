@@ -117,6 +117,10 @@ async def _background_recovery(store: Store, sqlite_store, config: Config) -> No
             None, rebuild_aggregates, store, sqlite_store, since
         )
         logger.info("Background recovery: %d rows restored", count)
+        # Recovery's read connection may have blocked WAL checkpointing —
+        # PASSIVE checkpoint to clean up accumulated frames without blocking
+        # the flush loop that's already running.
+        await loop.run_in_executor(None, sqlite_store.checkpoint)
     except Exception:
         logger.exception("Background recovery failed")
 
@@ -139,13 +143,18 @@ async def _sqlite_purge_loop(sqlite_store, config: Config, consumer=None) -> Non
         if deleted:
             logger.info("SQLite purge: deleted %d expired rows", deleted)
 
+        # Checkpoint WAL — safety net in case auto-checkpoint fell behind
+        # (e.g. concurrent readers blocked truncation during recovery).
+        await loop.run_in_executor(None, sqlite_store.checkpoint)
+
         # Persist registry metadata for fast recovery on restart
         if consumer:
             consumer._persist_metadata()
 
         size_mb = await loop.run_in_executor(None, sqlite_store.db_size_mb)
         row_ct = await loop.run_in_executor(None, sqlite_store.row_count)
-        logger.info("SQLite: %.1f MB, %d rows", size_mb, row_ct)
+        wal_mb = await loop.run_in_executor(None, sqlite_store.wal_size_mb)
+        logger.info("SQLite: %.1f MB, %d rows, WAL: %.1f MB", size_mb, row_ct, wal_mb)
 
 
 # ---------------------------------------------------------------------------

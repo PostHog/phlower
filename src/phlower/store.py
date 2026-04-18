@@ -658,6 +658,24 @@ class Store:
                 else:
                     break
 
+            # Clean up empty per-task deques left behind by evicted invocations
+            stale_task_deques = [
+                name for name, dq in self.invocations_by_task.items() if not dq
+            ]
+            for name in stale_task_deques:
+                del self.invocations_by_task[name]
+
+            # Clean up pickup latency entries for queues no longer seen
+            known_queues = set()
+            for agg in self.tasks.values():
+                for hourly in agg.hourly_queues.values():
+                    known_queues.update(hourly.keys())
+            stale_queues = [
+                q for q in self._pickup_latencies if q not in known_queues and q != "_global"
+            ]
+            for q in stale_queues:
+                del self._pickup_latencies[q]
+
         release_memory()
 
     # -- SSE dirty tracking -----------------------------------------------

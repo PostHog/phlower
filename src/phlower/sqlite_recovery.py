@@ -8,9 +8,9 @@ from collections import defaultdict
 
 from fastdigest import TDigest
 
-from .models import MinuteBucket, TaskState
+from .models import HourBucket, MinuteBucket, TaskState
 from .sqlite_store import SQLiteStore
-from .store import Store
+from .store import DIGEST_HOT_WINDOW, Store
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,11 @@ def rebuild_aggregates(store: Store, sqlite_store: SQLiteStore, since_ts: float)
       1. Counts — GROUP BY for bucket counters and worker/queue/exception tallies
       2. Runtimes — stream runtime_ms into t-digests (global + per-bucket)
       3. Pickup latency — recent received→started wait times
+
+    Data within DIGEST_HOT_WINDOW (2h) goes into per-minute buckets with
+    digests. Older data goes directly into hourly rollups — matching the
+    layout the live path would produce, avoiding a memory spike from
+    creating 288K per-minute TDigests for a full 48h recovery window.
     """
     start = time.monotonic()
     recovery_conn = sqlite_store.open_recovery_conn()
@@ -88,19 +93,40 @@ def _load_counts(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float)
 
 
 def _flush_counts(store: Store, batch: list[tuple]) -> None:
-    """Apply count rows under a single lock acquisition."""
+    """Apply count rows under a single lock acquisition.
+
+    Recent data (within DIGEST_HOT_WINDOW) goes into per-minute buckets.
+    Older data goes directly into hourly rollups to match steady-state layout.
+    """
+    hot_cutoff = int(time.time()) - DIGEST_HOT_WINDOW
     with store._lock:
         for (task_name, state, minute_ts, cnt, worker, queue, exception_type) in batch:
             agg = store._get_or_create_task(task_name)
-            bucket = agg._get_or_create_bucket(minute_ts)
-            bucket.count += cnt
 
-            if state == TaskState.SUCCESS:
-                bucket.success += cnt
-            elif state == TaskState.FAILURE:
-                bucket.failure += cnt
-            elif state == TaskState.RETRY:
-                bucket.retry += cnt
+            if minute_ts >= hot_cutoff:
+                # Recent data → per-minute buckets
+                bucket = agg._get_or_create_bucket(minute_ts)
+                bucket.count += cnt
+                if state == TaskState.SUCCESS:
+                    bucket.success += cnt
+                elif state == TaskState.FAILURE:
+                    bucket.failure += cnt
+                elif state == TaskState.RETRY:
+                    bucket.retry += cnt
+            else:
+                # Old data → hourly rollups directly
+                hour_ts = minute_ts // 3600 * 3600
+                hb = agg.hourly_counts.get(hour_ts)
+                if hb is None:
+                    hb = HourBucket(timestamp=hour_ts)
+                    agg.hourly_counts[hour_ts] = hb
+                hb.count += cnt
+                if state == TaskState.SUCCESS:
+                    hb.success += cnt
+                elif state == TaskState.FAILURE:
+                    hb.failure += cnt
+                elif state == TaskState.RETRY:
+                    hb.retry += cnt
 
             hour_ts = minute_ts // 3600 * 3600
             if worker:
@@ -112,11 +138,16 @@ def _flush_counts(store: Store, batch: list[tuple]) -> None:
 
 
 def _load_runtimes(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:
-    """Stream runtime values into t-digests using batch_update."""
-    # Group runtimes by task (and by bucket for recent data)
+    """Stream runtime values into t-digests using batch_update.
+
+    Per-minute digests only for the hot window (last 2h). Older runtimes
+    go into hourly rollup digests + the global per-task digest — same
+    layout the live path produces via coarsen_old_buckets.
+    """
     by_task: dict[str, list[float]] = defaultdict(list)
     by_bucket: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
-    bucket_cutoff = int(time.time()) - 48 * 3600
+    by_hourly: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    hot_cutoff = int(time.time()) - DIGEST_HOT_WINDOW
     total = 0
 
     for row in sqlite_store.load_recovery_runtimes(conn, since_ts):
@@ -125,19 +156,23 @@ def _load_runtimes(store: Store, sqlite_store: SQLiteStore, conn, since_ts: floa
         runtime_ms = row["runtime_ms"]
 
         by_task[task_name].append(runtime_ms)
-        if minute_ts >= bucket_cutoff:
+        if minute_ts >= hot_cutoff:
             by_bucket[task_name][minute_ts].append(runtime_ms)
+        else:
+            hour_ts = minute_ts // 3600 * 3600
+            by_hourly[task_name][hour_ts].append(runtime_ms)
         total += 1
 
         # Flush periodically to avoid unbounded memory
         if total % 1_000_000 == 0:
-            _flush_runtimes(store, by_task, by_bucket)
+            _flush_runtimes(store, by_task, by_bucket, by_hourly)
             by_task.clear()
             by_bucket.clear()
+            by_hourly.clear()
             logger.info("Recovery runtimes progress: %dM rows", total // 1_000_000)
 
     if by_task:
-        _flush_runtimes(store, by_task, by_bucket)
+        _flush_runtimes(store, by_task, by_bucket, by_hourly)
 
     return total
 
@@ -146,13 +181,16 @@ def _flush_runtimes(
     store: Store,
     by_task: dict[str, list[float]],
     by_bucket: dict[str, dict[int, list[float]]],
+    by_hourly: dict[str, dict[int, list[float]]],
 ) -> None:
     """Batch-update t-digests under a single lock acquisition."""
     with store._lock:
+        # Global per-task digest — all runtimes regardless of age
         for task_name, values in by_task.items():
             agg = store._get_or_create_task(task_name)
             agg.runtime_digest.batch_update(values)
 
+        # Per-minute digests — hot window only
         for task_name, buckets in by_bucket.items():
             agg = store.tasks.get(task_name)
             if agg is None:
@@ -163,6 +201,16 @@ def _flush_runtimes(
                     if bucket.digest is None:
                         bucket.digest = TDigest()
                     bucket.digest.batch_update(values)
+
+        # Hourly rollup digests — older data
+        for task_name, hours in by_hourly.items():
+            agg = store.tasks.get(task_name)
+            if agg is None:
+                continue
+            for hour_ts, values in hours.items():
+                if hour_ts not in agg.hourly_digests:
+                    agg.hourly_digests[hour_ts] = TDigest()
+                agg.hourly_digests[hour_ts].batch_update(values)
 
 
 def _load_pickup_latency(store: Store, sqlite_store: SQLiteStore, conn, since_ts: float) -> int:

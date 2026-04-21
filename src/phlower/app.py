@@ -106,26 +106,52 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         logger.exception("SQLite flush loop crashed")
 
 
-async def _background_recovery(store: Store, sqlite_store, config: Config) -> None:
-    """Rebuild aggregates from SQLite in a background thread. Non-blocking."""
-    from .sqlite_recovery import rebuild_aggregates
+async def _aggregate_snapshot_loop(
+    store: Store, sqlite_store, config: Config
+) -> None:
+    """Periodically persist dirty task aggregates as compressed snapshots."""
+    while True:
+        await asyncio.sleep(config.snapshot_interval_seconds)
+        dirty = store.drain_snapshot_dirty()
+        if not dirty:
+            continue
+        snapshots = store.snapshot_aggregates(dirty)
+        if snapshots:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
+            logger.info("Snapshot flush: %d tasks", len(snapshots))
 
-    since = time.time() - config.sqlite_recovery_hours * 3600
+
+async def _background_recovery(store: Store, sqlite_store, config: Config) -> None:
+    """Restore aggregates from snapshots, with gap replay for recent events."""
+    from .sqlite_recovery import rebuild_aggregates, restore_from_snapshots
+
     loop = asyncio.get_event_loop()
     try:
-        count = await loop.run_in_executor(
-            None, rebuild_aggregates, store, sqlite_store, since
+        snapshot_ts = await loop.run_in_executor(
+            None, restore_from_snapshots, store, sqlite_store
         )
-        logger.info("Background recovery: %d rows restored", count)
-        # Recovery's read connection may have blocked WAL checkpointing —
-        # PASSIVE checkpoint to clean up accumulated frames without blocking
-        # the flush loop that's already running.
+
+        if snapshot_ts is not None:
+            count = await loop.run_in_executor(
+                None, rebuild_aggregates, store, sqlite_store, snapshot_ts
+            )
+            logger.info("Snapshot recovery + gap replay: %d gap rows", count)
+        else:
+            since = time.time() - config.sqlite_recovery_hours * 3600
+            count = await loop.run_in_executor(
+                None, rebuild_aggregates, store, sqlite_store, since
+            )
+            logger.info("Full row-replay recovery: %d rows restored", count)
+
         await loop.run_in_executor(None, sqlite_store.checkpoint)
     except Exception:
         logger.exception("Background recovery failed")
 
 
-async def _sqlite_purge_loop(sqlite_store, config: Config, consumer=None) -> None:
+async def _sqlite_purge_loop(
+    store: Store, sqlite_store, config: Config, consumer=None
+) -> None:
     """Thin detail fields after SQLITE_DETAIL_HOURS, delete after AGGREGATE_RETENTION_HOURS."""
     while True:
         await asyncio.sleep(3600)
@@ -142,6 +168,12 @@ async def _sqlite_purge_loop(sqlite_store, config: Config, consumer=None) -> Non
         deleted = await loop.run_in_executor(None, sqlite_store.purge_expired, purge_cutoff)
         if deleted:
             logger.info("SQLite purge: deleted %d expired rows", deleted)
+
+        # Remove snapshots for tasks no longer tracked
+        active = set(store.tasks.keys())
+        await loop.run_in_executor(
+            None, sqlite_store.purge_stale_snapshots, active
+        )
 
         # Checkpoint WAL — safety net in case auto-checkpoint fell behind
         # (e.g. concurrent readers blocked truncation during recovery).
@@ -205,10 +237,14 @@ async def lifespan(app: FastAPI):
         sqlite_tasks.append(asyncio.create_task(_sqlite_flush_loop(store, sqlite_store)))
         sqlite_tasks.append(
             asyncio.create_task(
-                _sqlite_purge_loop(sqlite_store, config, consumer=consumer)
+                _aggregate_snapshot_loop(store, sqlite_store, config)
             )
         )
-        # Non-blocking recovery — rebuild aggregates in a thread while serving
+        sqlite_tasks.append(
+            asyncio.create_task(
+                _sqlite_purge_loop(store, sqlite_store, config, consumer=consumer)
+            )
+        )
         sqlite_tasks.append(
             asyncio.create_task(_background_recovery(store, sqlite_store, config))
         )
@@ -230,12 +266,18 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Graceful shutdown — flush remaining SQLite buffer + metadata
+    # Graceful shutdown — flush remaining SQLite buffer + snapshots + metadata
     if sqlite_store:
         remaining = store.drain_completed_for_sqlite()
         if remaining:
             sqlite_store.flush_batch(remaining)
             logger.info("Final SQLite flush: %d records", len(remaining))
+        all_task_names = set(store.tasks.keys())
+        if all_task_names:
+            snapshots = store.snapshot_aggregates(all_task_names)
+            if snapshots:
+                sqlite_store.save_snapshots(snapshots)
+                logger.info("Final snapshot flush: %d tasks", len(snapshots))
         consumer._persist_metadata()
         sqlite_store.close()
 

@@ -9,12 +9,42 @@ from collections import defaultdict
 from fastdigest import TDigest
 
 from .models import HourBucket, MinuteBucket, TaskState
+from .snapshot import deserialize_aggregate
 from .sqlite_store import SQLiteStore
 from .store import DIGEST_HOT_WINDOW, Store
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 100_000
+
+
+def restore_from_snapshots(store: Store, sqlite_store: SQLiteStore) -> float | None:
+    """Load aggregate snapshots and populate store.tasks.
+
+    Returns the minimum snapshot_ts (for gap replay), or None if no
+    snapshots exist.
+    """
+    rows = sqlite_store.load_snapshots()
+    if not rows:
+        return None
+
+    start = time.monotonic()
+    min_ts = float("inf")
+    restored = 0
+
+    with store._lock:
+        for task_name, snapshot_ts, data in rows:
+            try:
+                agg = deserialize_aggregate(data, task_name)
+                store.tasks[task_name] = agg
+                min_ts = min(min_ts, snapshot_ts)
+                restored += 1
+            except Exception:
+                logger.warning("Failed to restore snapshot for %s", task_name, exc_info=True)
+
+    elapsed = time.monotonic() - start
+    logger.info("Snapshot recovery: %d tasks in %.1fs", restored, elapsed)
+    return min_ts if restored > 0 else None
 
 
 def rebuild_aggregates(store: Store, sqlite_store: SQLiteStore, since_ts: float) -> int:

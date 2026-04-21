@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT NOT NULL,
     PRIMARY KEY (key, value)
 );
+
+CREATE TABLE IF NOT EXISTS aggregate_snapshots (
+    task_name    TEXT PRIMARY KEY,
+    snapshot_ts  REAL NOT NULL,
+    data         BLOB NOT NULL
+);
 """
 
 UPSERT_SQL = """
@@ -301,6 +307,47 @@ class SQLiteStore:
             (key,),
         ).fetchall()
         return [r[0] for r in rows]
+
+    # -- aggregate snapshots --------------------------------------------------
+
+    def save_snapshots(self, snapshots: list[tuple[str, float, bytes]]) -> int:
+        """Batch-upsert aggregate snapshots: (task_name, snapshot_ts, data)."""
+        if not snapshots:
+            return 0
+        self._conn.executemany(
+            "INSERT OR REPLACE INTO aggregate_snapshots (task_name, snapshot_ts, data) VALUES (?, ?, ?)",
+            snapshots,
+        )
+        self._conn.commit()
+        return len(snapshots)
+
+    def load_snapshots(self) -> list[tuple[str, float, bytes]]:
+        """Load all aggregate snapshots."""
+        rows = self._conn.execute(
+            "SELECT task_name, snapshot_ts, data FROM aggregate_snapshots"
+        ).fetchall()
+        return rows
+
+    def min_snapshot_ts(self) -> float | None:
+        """Oldest snapshot timestamp, or None if table is empty."""
+        row = self._conn.execute(
+            "SELECT MIN(snapshot_ts) FROM aggregate_snapshots"
+        ).fetchone()
+        return row[0] if row and row[0] is not None else None
+
+    def purge_stale_snapshots(self, active_tasks: set[str]) -> int:
+        """Remove snapshots for tasks no longer tracked in memory."""
+        if not active_tasks:
+            self._conn.execute("DELETE FROM aggregate_snapshots")
+            self._conn.commit()
+            return 0
+        placeholders = ",".join("?" for _ in active_tasks)
+        cur = self._conn.execute(
+            f"DELETE FROM aggregate_snapshots WHERE task_name NOT IN ({placeholders})",
+            list(active_tasks),
+        )
+        self._conn.commit()
+        return cur.rowcount
 
     def close(self) -> None:
         self.checkpoint(truncate=True)

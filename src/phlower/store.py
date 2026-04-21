@@ -358,6 +358,9 @@ class Store:
             lambda: deque(maxlen=500)
         )
 
+        # snapshot dirty tracking (separate from SSE dirty tracking)
+        self._snapshot_dirty: set[str] = set()
+
     # -- internal helpers (call with lock held) ---------------------------
 
     def _should_track(self, task_name: str) -> bool:
@@ -545,6 +548,7 @@ class Store:
             rec.transitions.append((TaskState.SUCCESS, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._snapshot_dirty.add(name)
             self._sqlite_pending.append(self._snapshot(rec))
 
     def process_failed(
@@ -588,6 +592,7 @@ class Store:
             rec.transitions.append((TaskState.FAILURE, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._snapshot_dirty.add(name)
             self._sqlite_pending.append(self._snapshot(rec))
             # Heavy fields persisted to SQLite — free from memory
             rec.traceback_snippet = None
@@ -622,6 +627,7 @@ class Store:
             rec.transitions.append((TaskState.RETRY, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
+            self._snapshot_dirty.add(name)
             self._sqlite_pending.append(self._snapshot(rec))
             # Heavy fields persisted to SQLite — free from memory
             rec.traceback_snippet = None
@@ -641,8 +647,8 @@ class Store:
         with self._lock:
             for agg in self.tasks.values():
                 agg.coarsen_old_buckets(coarsen_cutoff_minute)
-                # Delete hourly rollups older than 7 days entirely
                 agg.evict_old_buckets(agg_cutoff_minute)
+                self._snapshot_dirty.add(agg.task_name)
 
             # Invocations: shorter retention (default 48h)
             while self._invocation_order:
@@ -694,6 +700,26 @@ class Store:
             records = self._sqlite_pending
             self._sqlite_pending = []
             return records
+
+    def drain_snapshot_dirty(self) -> set[str]:
+        """Pop task names that need a fresh aggregate snapshot."""
+        with self._lock:
+            dirty = self._snapshot_dirty
+            self._snapshot_dirty = set()
+            return dirty
+
+    def snapshot_aggregates(self, task_names: set[str]) -> list[tuple[str, float, bytes]]:
+        """Serialize named TaskAggregates for SQLite persistence."""
+        from .snapshot import serialize_aggregate
+
+        now = time.time()
+        snapshots: list[tuple[str, float, bytes]] = []
+        with self._lock:
+            for name in task_names:
+                agg = self.tasks.get(name)
+                if agg is not None:
+                    snapshots.append((name, now, serialize_aggregate(agg)))
+        return snapshots
 
     def record_event(self) -> None:
         """Track an incoming event for rate computation."""

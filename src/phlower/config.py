@@ -66,3 +66,6 @@ class Config:
     sqlite_detail_hours: int = field(
         default_factory=lambda: int(os.environ.get("SQLITE_DETAIL_HOURS", "8"))
     )
+    snapshot_interval_seconds: int = field(
+        default_factory=lambda: int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "60"))
+    )

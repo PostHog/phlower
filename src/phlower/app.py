@@ -84,7 +84,7 @@ async def _sparkline_push_loop(store: Store, broadcaster: SSEBroadcaster) -> Non
 async def _eviction_loop(store: Store, config: Config) -> None:
     """Periodic cleanup of data older than retention window."""
     while True:
-        await asyncio.sleep(300)  # every 5 min — eviction is cheap
+        await asyncio.sleep(1800)
         store.evict_expired()
         logger.debug("Eviction pass completed")
 

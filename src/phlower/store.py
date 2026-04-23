@@ -336,12 +336,8 @@ class Store:
         # task_name → aggregate
         self.tasks: dict[str, TaskAggregate] = {}
 
-        # task_id → record
+        # task_id → record (in-flight + pending-flush only, ~800 entries)
         self.invocations: dict[str, InvocationRecord] = {}
-        # task_name → deque of task_ids (insertion order)
-        self.invocations_by_task: dict[str, deque[str]] = defaultdict(deque)
-        # global insertion order for eviction
-        self._invocation_order: deque[str] = deque()
 
         # dirty tracking for throttled SSE push
         self._dirty_tasks: set[str] = set()
@@ -385,21 +381,6 @@ class Store:
         )
 
 
-    def _evict_global(self) -> None:
-        while len(self.invocations) > self.config.max_global_invocations:
-            oldest_id = self._invocation_order.popleft()
-            self.invocations.pop(oldest_id, None)
-            # Per-task deque entries become stale — readers filter via
-            # `if tid in self.invocations` so no O(n) dq.remove() needed.
-
-    def _evict_per_task(self, task_name: str) -> None:
-        dq = self.invocations_by_task.get(task_name)
-        if not dq:
-            return
-        while len(dq) > self.config.max_invocations_per_task:
-            old_id = dq.popleft()
-            self.invocations.pop(old_id, None)
-
     def _get_or_create_task(self, task_name: str) -> TaskAggregate:
         agg = self.tasks.get(task_name)
         if agg is None:
@@ -419,12 +400,8 @@ class Store:
     def _ensure_record(self, task_id: str, task_name: str) -> InvocationRecord:
         rec = self.invocations.get(task_id)
         if rec is not None:
-            # upgrade name if we now have it
             if task_name != "unknown" and rec.task_name == "unknown":
                 rec.task_name = task_name
-                # Don't dq.remove from "unknown" (O(n)) — stale entries are
-                # filtered on read via `if tid in self.invocations` check.
-                self.invocations_by_task[task_name].append(task_id)
             return rec
 
         rec = InvocationRecord(
@@ -433,10 +410,6 @@ class Store:
             state=TaskState.RECEIVED,
         )
         self.invocations[task_id] = rec
-        self.invocations_by_task[task_name].append(task_id)
-        self._invocation_order.append(task_id)
-        self._evict_global()
-        self._evict_per_task(task_name)
         return rec
 
     # -- write methods (called from Celery consumer thread) ---------------
@@ -650,26 +623,15 @@ class Store:
                 agg.evict_old_buckets(agg_cutoff_minute)
                 self._snapshot_dirty.add(agg.task_name)
 
-            # Invocations: shorter retention (default 48h)
-            while self._invocation_order:
-                task_id = self._invocation_order[0]
-                rec = self.invocations.get(task_id)
-                if rec is None:
-                    self._invocation_order.popleft()
-                    continue
-                ts = rec.finished_at or rec.started_at or rec.received_at
-                if ts is not None and ts < inv_cutoff:
-                    self._invocation_order.popleft()
-                    self.invocations.pop(task_id, None)
-                else:
-                    break
-
-            # Clean up empty per-task deques left behind by evicted invocations
-            stale_task_deques = [
-                name for name, dq in self.invocations_by_task.items() if not dq
+            # Safety net: remove any leaked records older than retention.
+            # Normally drain_completed_for_sqlite removes completed records,
+            # but this catches edge cases (flush loop crash, etc.).
+            stale = [
+                tid for tid, rec in self.invocations.items()
+                if (rec.finished_at or rec.started_at or rec.received_at or 0) < inv_cutoff
             ]
-            for name in stale_task_deques:
-                del self.invocations_by_task[name]
+            for tid in stale:
+                del self.invocations[tid]
 
             # Clean up pickup latency entries for queues no longer seen
             known_queues = set()
@@ -686,19 +648,31 @@ class Store:
 
     # -- SSE dirty tracking -----------------------------------------------
 
-    def flush_dirty(self) -> tuple[set[str], list[str]]:
+    def flush_dirty(self) -> set[str]:
+        """Pop dirty task names for task_update SSE."""
         with self._lock:
             tasks = self._dirty_tasks
-            invocations = self._new_invocation_ids
             self._dirty_tasks = set()
+            return tasks
+
+    def flush_new_invocation_ids(self) -> list[str]:
+        """Pop new invocation IDs for invocation_update SSE."""
+        with self._lock:
+            ids = self._new_invocation_ids
             self._new_invocation_ids = []
-            return tasks, invocations
+            return ids
 
     def drain_completed_for_sqlite(self) -> list[CompletedRecord]:
-        """Pop pending completed records for SQLite flush."""
+        """Pop pending completed records for SQLite flush.
+
+        Also removes them from the in-memory invocations dict — they're
+        about to be written to SQLite and queryable from there.
+        """
         with self._lock:
             records = self._sqlite_pending
             self._sqlite_pending = []
+            for r in records:
+                self.invocations.pop(r.task_id, None)
             return records
 
     def drain_snapshot_dirty(self) -> set[str]:
@@ -791,22 +765,14 @@ class Store:
         after_ts: float | None = None,
     ) -> list[InvocationRecord]:
         with self._lock:
-            dq = self.invocations_by_task.get(task_name, deque())
-            results: list[InvocationRecord] = []
-            for tid in reversed(dq):
-                rec = self.invocations.get(tid)
-                if rec is None:
-                    continue
-                ts = rec.received_at or rec.started_at or 0.0
-                if before_ts is not None and ts >= before_ts:
-                    continue
-                if after_ts is not None and ts <= after_ts:
-                    break  # older than cursor, stop (list is newest-first)
-                results.append(rec)
-                if len(results) >= limit:
-                    break
+            results = [
+                rec for rec in self.invocations.values()
+                if rec.task_name == task_name
+                and (before_ts is None or (rec.received_at or 0) < before_ts)
+                and (after_ts is None or (rec.received_at or 0) > after_ts)
+            ]
+        results.sort(key=lambda r: r.received_at or 0, reverse=True)
 
-        # Fill remaining slots from SQLite if in-memory didn't have enough
         remaining = limit - len(results)
         if remaining > 0 and self.sqlite_store is not None:
             seen = {r.task_id for r in results}
@@ -819,18 +785,12 @@ class Store:
             )
             results.extend(sqlite_results)
 
-        return results
+        return results[:limit]
 
     def get_invocation(self, task_id: str) -> InvocationRecord | None:
         with self._lock:
             rec = self.invocations.get(task_id)
         if rec is not None:
-            # Enrich with traceback from SQLite if stripped from memory
-            if rec.traceback_snippet is None and self.sqlite_store is not None:
-                sqlite_rec = self.sqlite_store.lookup_task_id(task_id)
-                if sqlite_rec is not None:
-                    rec.traceback_snippet = sqlite_rec.traceback_snippet
-                    rec.exception_message = sqlite_rec.exception_message
             return rec
         if self.sqlite_store is not None:
             return self.sqlite_store.lookup_task_id(task_id)
@@ -862,17 +822,18 @@ class Store:
                         return [sqlite_rec]
                 return []
 
-            # Iterate newest-first via _invocation_order (already time-ordered).
-            # Early exit after offset+limit matches — avoids full scan + sort.
             q_lower = q.lower() if q else None
             status_upper = status.upper() if status else None
             results: list[InvocationRecord] = []
             skipped = 0
 
-            for tid in reversed(self._invocation_order):
-                rec = self.invocations.get(tid)
-                if rec is None:
-                    continue
+            # Sort in-memory records newest-first for consistent ordering
+            sorted_recs = sorted(
+                self.invocations.values(),
+                key=lambda r: r.received_at or 0,
+                reverse=True,
+            )
+            for rec in sorted_recs:
                 if task_name and rec.task_name != task_name:
                     continue
                 if status_upper and rec.state.value != status_upper:

@@ -107,11 +107,12 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         try:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, sqlite_store.flush_batch, records)
+            store.remove_flushed([r.task_id for r in records])
             logger.info("SQLite flush: %d records", len(records))
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("SQLite flush error (dropped %d records)", len(records))
+            logger.exception("SQLite flush error (%d records retained in memory)", len(records))
 
 
 async def _aggregate_snapshot_loop(

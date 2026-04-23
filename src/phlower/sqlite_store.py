@@ -216,6 +216,63 @@ class SQLiteStore:
                 break
         return results
 
+    def search(
+        self,
+        *,
+        task_name: str | None = None,
+        state: str | None = None,
+        worker: str | None = None,
+        queue: str | None = None,
+        q: str | None = None,
+        time_from: float | None = None,
+        time_to: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        exclude_ids: set[str] | None = None,
+    ) -> list[InvocationRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if task_name:
+            clauses.append("task_name = ?")
+            params.append(task_name)
+        if state:
+            clauses.append("state = ?")
+            params.append(state)
+        if worker:
+            clauses.append("worker = ?")
+            params.append(worker)
+        if queue:
+            clauses.append("queue = ?")
+            params.append(queue)
+        if time_from:
+            clauses.append("finished_at >= ?")
+            params.append(time_from)
+        if time_to:
+            clauses.append("finished_at <= ?")
+            params.append(time_to)
+        if q:
+            clauses.append(
+                "(task_id LIKE ? OR task_name LIKE ? OR args_preview LIKE ?"
+                " OR kwargs_preview LIKE ? OR exception_type LIKE ?"
+                " OR worker LIKE ? OR queue LIKE ?)"
+            )
+            pattern = f"%{q}%"
+            params.extend([pattern] * 7)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
+        sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ? OFFSET ?"
+        params.extend([fetch_limit, offset])
+        rows = self._conn.execute(sql, params).fetchall()
+        results: list[InvocationRecord] = []
+        for row in rows:
+            if exclude_ids and row[0] in exclude_ids:
+                continue
+            results.append(self._row_to_record(row))
+            if len(results) >= limit:
+                break
+        return results
+
     def open_recovery_conn(self) -> sqlite3.Connection:
         """Open a separate connection for recovery. Caller must close it."""
         return self._connect(self.db_path)

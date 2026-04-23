@@ -336,8 +336,11 @@ class Store:
         # task_name → aggregate
         self.tasks: dict[str, TaskAggregate] = {}
 
-        # task_id → record (in-flight + pending-flush only, ~800 entries)
+        # task_id → record
+        # With SQLite: in-flight + pending-flush only (~800 entries, drain removes completed)
+        # Without SQLite: capped at 50K with FIFO eviction as safety valve
         self.invocations: dict[str, InvocationRecord] = {}
+        self._invocation_order: deque[str] = deque()
 
         # dirty tracking for throttled SSE push
         self._dirty_tasks: set[str] = set()
@@ -397,6 +400,8 @@ class Store:
             return rec.task_name
         return "unknown"
 
+    _NO_SQLITE_CAP = 50_000
+
     def _ensure_record(self, task_id: str, task_name: str) -> InvocationRecord:
         rec = self.invocations.get(task_id)
         if rec is not None:
@@ -410,6 +415,11 @@ class Store:
             state=TaskState.RECEIVED,
         )
         self.invocations[task_id] = rec
+        self._invocation_order.append(task_id)
+        if self.sqlite_store is None:
+            while len(self.invocations) > self._NO_SQLITE_CAP:
+                old_id = self._invocation_order.popleft()
+                self.invocations.pop(old_id, None)
         return rec
 
     # -- write methods (called from Celery consumer thread) ---------------
@@ -668,17 +678,17 @@ class Store:
             return ids
 
     def drain_completed_for_sqlite(self) -> list[CompletedRecord]:
-        """Pop pending completed records for SQLite flush.
-
-        Also removes them from the in-memory invocations dict — they're
-        about to be written to SQLite and queryable from there.
-        """
+        """Pop pending completed records for SQLite flush."""
         with self._lock:
             records = self._sqlite_pending
             self._sqlite_pending = []
-            for r in records:
-                self.invocations.pop(r.task_id, None)
             return records
+
+    def remove_flushed(self, task_ids: list[str]) -> None:
+        """Remove records that were successfully written to SQLite."""
+        with self._lock:
+            for tid in task_ids:
+                self.invocations.pop(tid, None)
 
     def drain_snapshot_dirty(self) -> set[str]:
         """Pop task names that need a fresh aggregate snapshot."""
@@ -827,18 +837,12 @@ class Store:
                         return [sqlite_rec]
                 return []
 
+            # Collect matching in-memory records (in-flight + pending flush)
             q_lower = q.lower() if q else None
             status_upper = status.upper() if status else None
-            results: list[InvocationRecord] = []
-            skipped = 0
+            mem_results: list[InvocationRecord] = []
 
-            # Sort in-memory records newest-first for consistent ordering
-            sorted_recs = sorted(
-                self.invocations.values(),
-                key=lambda r: r.received_at or 0,
-                reverse=True,
-            )
-            for rec in sorted_recs:
+            for rec in self.invocations.values():
                 if task_name and rec.task_name != task_name:
                     continue
                 if status_upper and rec.state.value != status_upper:
@@ -870,11 +874,26 @@ class Store:
                     ).lower()
                     if q_lower not in haystack:
                         continue
-                if skipped < offset:
-                    skipped += 1
-                    continue
-                results.append(rec)
-                if len(results) >= limit:
-                    break
+                mem_results.append(rec)
 
-            return results
+        # Fill from SQLite for historical data
+        seen = {r.task_id for r in mem_results}
+        if self.sqlite_store is not None:
+            remaining = limit + offset - len(mem_results)
+            if remaining > 0:
+                sqlite_results = self.sqlite_store.search(
+                    task_name=task_name,
+                    state=status_upper,
+                    worker=worker,
+                    queue=queue,
+                    q=q,
+                    time_from=time_from,
+                    time_to=time_to,
+                    limit=remaining,
+                    offset=max(0, offset - len(mem_results)),
+                    exclude_ids=seen,
+                )
+                mem_results.extend(sqlite_results)
+
+        mem_results.sort(key=lambda r: r.updated_at or r.received_at or 0, reverse=True)
+        return mem_results[offset:offset + limit]

@@ -458,6 +458,7 @@ class Store:
             rec.kwargs_preview = (
                 kwargs[: self.config.max_kwargs_preview_chars] if kwargs else None
             )
+            rec.updated_at = ts
             rec.transitions.append((TaskState.RECEIVED, ts))
             self._dirty_tasks.add(task_name)
             self.record_event()
@@ -485,6 +486,7 @@ class Store:
             rec.worker_group = worker_group
             if queue and not rec.queue:
                 rec.queue = queue
+            rec.updated_at = ts
             rec.transitions.append((TaskState.STARTED, ts))
             # Track pickup latency (time spent waiting in queue)
             if rec.received_at is not None and not rec.transitions[0][0] == TaskState.STARTED:
@@ -518,6 +520,7 @@ class Store:
             rec.state = TaskState.SUCCESS
             rec.finished_at = ts
             rec.runtime_ms = runtime_ms
+            rec.updated_at = ts
             rec.transitions.append((TaskState.SUCCESS, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
@@ -562,6 +565,7 @@ class Store:
             rec.exception_type = exception_type
             rec.exception_message = exception_message
             rec.traceback_snippet = traceback_snippet
+            rec.updated_at = ts
             rec.transitions.append((TaskState.FAILURE, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
@@ -597,6 +601,7 @@ class Store:
             rec.exception_type = exception_type
             rec.exception_message = exception_message
             rec.traceback_snippet = traceback_snippet
+            rec.updated_at = ts
             rec.transitions.append((TaskState.RETRY, ts))
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
@@ -768,10 +773,10 @@ class Store:
             results = [
                 rec for rec in self.invocations.values()
                 if rec.task_name == task_name
-                and (before_ts is None or (rec.received_at or 0) < before_ts)
-                and (after_ts is None or (rec.received_at or 0) > after_ts)
+                and (before_ts is None or (rec.updated_at or rec.received_at or 0) < before_ts)
+                and (after_ts is None or (rec.updated_at or rec.received_at or 0) > after_ts)
             ]
-        results.sort(key=lambda r: r.received_at or 0, reverse=True)
+        results.sort(key=lambda r: r.updated_at or r.received_at or 0, reverse=True)
 
         remaining = limit - len(results)
         if remaining > 0 and self.sqlite_store is not None:

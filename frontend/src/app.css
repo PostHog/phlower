@@ -481,13 +481,14 @@ h3 {
   background: #fafafa;
 }
 
-/* New row highlight — applied via React key change */
+/* Recent row — fade in + subtle highlight */
 .data-table tbody tr.row-new {
-  animation: rowFlash 1.5s ease-out;
+  background: var(--blue-light);
+  animation: rowFadeIn 0.4s ease-out;
 }
-@keyframes rowFlash {
-  0% { background: var(--blue-light); }
-  100% { background: transparent; }
+@keyframes rowFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .data-table.compact td { padding: 5px 12px; }

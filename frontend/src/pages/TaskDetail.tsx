@@ -119,48 +119,53 @@ export function TaskDetail() {
   // Initial load
   useEffect(() => {
     api.taskInvocations(name, { limit: 100 }).then((records) => {
-      const sorted = [...records].sort((a, b) => (a.received_at ?? 0) - (b.received_at ?? 0));
+      const sorted = [...records].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
       setInvocations(sorted);
       setHasOlder(records.length >= 100);
       if (sorted.length > 0) {
-        latestTs.current = sorted[sorted.length - 1].received_at ?? 0;
+        latestTs.current = Math.max(...sorted.map((r) => r.updated_at ?? 0));
       }
     });
     return () => { setInvocations([]); latestTs.current = 0; };
   }, [name]);
 
-  // SSE-triggered incremental append
+  // SSE-triggered incremental fetch — uses updated_at cursor to catch
+  // both new records and state transitions (RECEIVED→SUCCESS)
   useEffect(() => {
     const handler = () => {
       if (!latestTs.current && invocations.length === 0) return;
       api.taskInvocations(name, { limit: 500, after_ts: latestTs.current }).then((records) => {
         if (records.length === 0) return;
-        const sorted = [...records].sort((a, b) => (a.received_at ?? 0) - (b.received_at ?? 0));
         setInvocations((prev) => {
-          const seen = new Set(prev.map((r) => r.task_id));
-          const fresh = sorted.filter((r) => !seen.has(r.task_id));
-          return fresh.length > 0 ? [...prev, ...fresh] : prev;
+          const byId = new Map(prev.map((r) => [r.task_id, r]));
+          let changed = false;
+          for (const rec of records) {
+            const existing = byId.get(rec.task_id);
+            if (!existing || existing.state !== rec.state) {
+              byId.set(rec.task_id, rec);
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          return [...byId.values()].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
         });
-        const newest = sorted[sorted.length - 1];
-        if (newest.received_at && newest.received_at > latestTs.current) {
-          latestTs.current = newest.received_at;
-        }
+        const maxTs = Math.max(...records.map((r) => r.updated_at ?? 0));
+        if (maxTs > latestTs.current) latestTs.current = maxTs;
         setPulse(true);
         setTimeout(() => setPulse(false), 400);
       });
     };
 
-    // Listen for SSE invocation_update via custom event
     window.addEventListener("phlower:invocation_update", handler);
     return () => window.removeEventListener("phlower:invocation_update", handler);
   }, [name, invocations.length]);
 
   const loadOlder = useCallback(() => {
     if (invocations.length === 0) return;
-    const oldestTs = invocations[0].received_at ?? 0;
+    const oldestTs = invocations[0].updated_at ?? invocations[0].received_at ?? 0;
     api.taskInvocations(name, { limit: 100, before_ts: oldestTs }).then((records) => {
       if (records.length === 0) { setHasOlder(false); return; }
-      const sorted = [...records].sort((a, b) => (a.received_at ?? 0) - (b.received_at ?? 0));
+      const sorted = [...records].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
       setInvocations((prev) => {
         const seen = new Set(prev.map((r) => r.task_id));
         const fresh = sorted.filter((r) => !seen.has(r.task_id));
@@ -349,11 +354,10 @@ export function TaskDetail() {
           autoScroll
           estimateSize={38}
           maxHeight={2100}
-          getRowClassName={(inv) =>
-            inv.received_at != null && Date.now() / 1000 - inv.received_at < 5
-              ? "row-new"
-              : ""
-          }
+          getRowClassName={(inv) => {
+            const ts = inv.updated_at ?? inv.received_at ?? 0;
+            return ts > 0 && Date.now() / 1000 - ts < 5 ? "row-new" : "";
+          }}
         />
       ) : (
         <div className="empty-state"><p>No invocations recorded.</p></div>

@@ -133,6 +133,7 @@ class InvocationResponse(BaseModel):
     exception_message: str | None
     traceback_snippet: str | None
     retries: int
+    updated_at: float | None
     transitions: list[Transition]
 
     @classmethod
@@ -154,6 +155,7 @@ class InvocationResponse(BaseModel):
             exception_message=r.exception_message,
             traceback_snippet=r.traceback_snippet,
             retries=r.retries,
+            updated_at=getattr(r, "updated_at", None) or r.finished_at,
             transitions=[Transition(state=s, ts=t) for s, t in r.transitions],
         )
 

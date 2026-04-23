@@ -33,6 +33,7 @@ class InvocationRecord:
     exception_message: str | None = None
     traceback_snippet: str | None = None
     retries: int = 0
+    updated_at: float | None = None
     transitions: list[tuple[str, float]] = field(default_factory=list)
 
 

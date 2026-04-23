@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Iterator
 
 from .models import InvocationRecord, TaskState
+
+
+def _serialized(method):
+    """Serialize access to the shared SQLite connection via _write_lock."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._write_lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +78,7 @@ class SQLiteStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._cached_row_count: int = 0
+        self._write_lock = threading.Lock()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
 
@@ -101,6 +113,7 @@ class SQLiteStore:
 
     # -- writes -----------------------------------------------------------
 
+    @_serialized
     def flush_batch(self, records: list) -> int:
         if not records:
             return 0
@@ -128,6 +141,7 @@ class SQLiteStore:
         self._conn.commit()
         return len(records)
 
+    @_serialized
     def thin_details(self, cutoff_ts: float) -> int:
         """NULL out heavy fields (args/kwargs/traceback) for old records.
         Processes in 10K batches to avoid long write locks."""
@@ -141,6 +155,7 @@ class SQLiteStore:
                 break
         return total
 
+    @_serialized
     def purge_expired(self, cutoff_ts: float) -> int:
         """Delete old rows in batches to avoid long write locks."""
         total = 0
@@ -191,6 +206,63 @@ class SQLiteStore:
         fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
         sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ?"
         params.append(fetch_limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        results: list[InvocationRecord] = []
+        for row in rows:
+            if exclude_ids and row[0] in exclude_ids:
+                continue
+            results.append(self._row_to_record(row))
+            if len(results) >= limit:
+                break
+        return results
+
+    def search(
+        self,
+        *,
+        task_name: str | None = None,
+        state: str | None = None,
+        worker: str | None = None,
+        queue: str | None = None,
+        q: str | None = None,
+        time_from: float | None = None,
+        time_to: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        exclude_ids: set[str] | None = None,
+    ) -> list[InvocationRecord]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if task_name:
+            clauses.append("task_name = ?")
+            params.append(task_name)
+        if state:
+            clauses.append("state = ?")
+            params.append(state)
+        if worker:
+            clauses.append("worker = ?")
+            params.append(worker)
+        if queue:
+            clauses.append("queue = ?")
+            params.append(queue)
+        if time_from:
+            clauses.append("finished_at >= ?")
+            params.append(time_from)
+        if time_to:
+            clauses.append("finished_at <= ?")
+            params.append(time_to)
+        if q:
+            clauses.append(
+                "(task_id LIKE ? OR task_name LIKE ? OR args_preview LIKE ?"
+                " OR kwargs_preview LIKE ? OR exception_type LIKE ?"
+                " OR worker LIKE ? OR queue LIKE ?)"
+            )
+            pattern = f"%{q}%"
+            params.extend([pattern] * 7)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
+        sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ? OFFSET ?"
+        params.extend([fetch_limit, offset])
         rows = self._conn.execute(sql, params).fetchall()
         results: list[InvocationRecord] = []
         for row in rows:
@@ -290,6 +362,7 @@ class SQLiteStore:
 
     # -- metadata persistence -----------------------------------------------
 
+    @_serialized
     def save_metadata(self, key: str, values: list[str]) -> None:
         """Replace all values for a metadata key."""
         self._conn.execute("DELETE FROM metadata WHERE key = ?", (key,))
@@ -310,6 +383,7 @@ class SQLiteStore:
 
     # -- aggregate snapshots --------------------------------------------------
 
+    @_serialized
     def save_snapshots(self, snapshots: list[tuple[str, float, bytes]]) -> int:
         """Batch-upsert aggregate snapshots: (task_name, snapshot_ts, data)."""
         if not snapshots:
@@ -335,6 +409,7 @@ class SQLiteStore:
         ).fetchone()
         return row[0] if row and row[0] is not None else None
 
+    @_serialized
     def purge_stale_snapshots(self, active_tasks: set[str]) -> int:
         """Remove snapshots for tasks no longer tracked in memory."""
         if not active_tasks:
@@ -355,6 +430,7 @@ class SQLiteStore:
 
     # -- WAL management -----------------------------------------------------
 
+    @_serialized
     def checkpoint(self, *, truncate: bool = False) -> None:
         """Force WAL checkpoint.
 

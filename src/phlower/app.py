@@ -40,10 +40,9 @@ async def _sse_push_loop(
     stats_tick = 0
     while True:
         await asyncio.sleep(config.sse_throttle_seconds)
-        dirty_tasks, new_ids = store.flush_dirty()
+        dirty_tasks = store.flush_dirty()
         stats_tick += 1
 
-        # Push stats every ~2s (every 7th tick at 300ms) or when there's activity
         send_stats = dirty_tasks or stats_tick >= 7
         if send_stats:
             stats_tick = 0
@@ -68,6 +67,14 @@ async def _sse_push_loop(
 
         broadcaster.broadcast("task_update", payload)
 
+
+async def _invocation_push_loop(
+    store: Store, broadcaster: SSEBroadcaster, config: Config
+) -> None:
+    """Push invocation update signals at a slower cadence (default 600ms)."""
+    while True:
+        await asyncio.sleep(config.sse_invocation_throttle_seconds)
+        new_ids = store.flush_new_invocation_ids()
         if new_ids:
             broadcaster.broadcast("invocation_update", {"ids": new_ids[-20:]})
 
@@ -92,18 +99,20 @@ async def _eviction_loop(store: Store, config: Config) -> None:
 async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
     """Batch flush completed invocations to SQLite every 1.5 seconds."""
     logger.info("SQLite flush loop started")
-    try:
-        while True:
-            await asyncio.sleep(1.5)
-            records = store.drain_completed_for_sqlite()
-            if records:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, sqlite_store.flush_batch, records)
-                logger.info("SQLite flush: %d records", len(records))
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("SQLite flush loop crashed")
+    while True:
+        await asyncio.sleep(1.5)
+        records = store.drain_completed_for_sqlite()
+        if not records:
+            continue
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, sqlite_store.flush_batch, records)
+            store.remove_flushed([r.task_id for r in records])
+            logger.info("SQLite flush: %d records", len(records))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("SQLite flush error (%d records retained in memory)", len(records))
 
 
 async def _aggregate_snapshot_loop(
@@ -115,11 +124,16 @@ async def _aggregate_snapshot_loop(
         dirty = store.drain_snapshot_dirty()
         if not dirty:
             continue
-        snapshots = store.snapshot_aggregates(dirty)
-        if snapshots:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
-            logger.info("Snapshot flush: %d tasks", len(snapshots))
+        try:
+            snapshots = store.snapshot_aggregates(dirty)
+            if snapshots:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
+                logger.info("Snapshot flush: %d tasks", len(snapshots))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Snapshot flush error")
 
 
 async def _background_recovery(store: Store, sqlite_store, config: Config) -> None:
@@ -228,6 +242,7 @@ async def lifespan(app: FastAPI):
 
     store._app_started_at = time.time()
     sse_task = asyncio.create_task(_sse_push_loop(store, broadcaster, config))
+    inv_push_task = asyncio.create_task(_invocation_push_loop(store, broadcaster, config))
     sparkline_task = asyncio.create_task(_sparkline_push_loop(store, broadcaster))
     evict_task = asyncio.create_task(_eviction_loop(store, config))
 
@@ -257,10 +272,9 @@ async def lifespan(app: FastAPI):
     app.state.sqlite_store = sqlite_store
 
     logger.info(
-        "Phlower started — broker=%s retention=%dh max_invocations=%d sqlite=%s",
+        "Phlower started — broker=%s retention=%dh sqlite=%s",
         config.broker_url,
         config.retention_hours,
-        config.max_global_invocations,
         config.sqlite_path or "disabled",
     )
 
@@ -284,6 +298,7 @@ async def lifespan(app: FastAPI):
     for t in sqlite_tasks:
         t.cancel()
     sse_task.cancel()
+    inv_push_task.cancel()
     sparkline_task.cancel()
     evict_task.cancel()
     consumer.stop()

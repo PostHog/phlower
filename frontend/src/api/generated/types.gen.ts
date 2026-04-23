@@ -147,6 +147,10 @@ export type InvocationResponse = {
      */
     retries: number;
     /**
+     * Updated At
+     */
+    updated_at: number | null;
+    /**
      * Transitions
      */
     transitions: Array<Transition>;

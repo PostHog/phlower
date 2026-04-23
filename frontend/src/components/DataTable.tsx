@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import {
   type ColumnDef,
   type SortingState,
@@ -18,6 +18,7 @@ interface Props<T> {
   estimateSize?: number;
   maxHeight?: number;
   initialSorting?: SortingState;
+  autoScroll?: boolean;
 }
 
 export function DataTable<T>({
@@ -28,6 +29,7 @@ export function DataTable<T>({
   estimateSize = 36,
   maxHeight = 600,
   initialSorting = [],
+  autoScroll = false,
 }: Props<T>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
 
@@ -50,6 +52,7 @@ export function DataTable<T>({
         getRowClassName={getRowClassName}
         estimateSize={estimateSize}
         maxHeight={maxHeight}
+        autoScroll={autoScroll}
       />
     );
   }
@@ -105,14 +108,18 @@ function VirtualizedBody<T>({
   getRowClassName,
   estimateSize,
   maxHeight,
+  autoScroll = false,
 }: {
   table: ReturnType<typeof useReactTable<T>>;
   rows: ReturnType<ReturnType<typeof useReactTable<T>>["getRowModel"]>["rows"];
   getRowClassName?: (row: T) => string;
   estimateSize: number;
   maxHeight: number;
+  autoScroll?: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const isAtBottom = useRef(true);
+  const prevCount = useRef(rows.length);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -120,6 +127,31 @@ function VirtualizedBody<T>({
     estimateSize: () => estimateSize,
     overscan: 10,
   });
+
+  const handleScroll = useCallback(() => {
+    const el = parentRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    isAtBottom.current = distanceFromBottom < 100;
+  }, []);
+
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el || !autoScroll) return;
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [autoScroll, handleScroll]);
+
+  useEffect(() => {
+    if (!autoScroll || rows.length <= prevCount.current) {
+      prevCount.current = rows.length;
+      return;
+    }
+    prevCount.current = rows.length;
+    if (isAtBottom.current && rows.length > 0) {
+      virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    }
+  }, [autoScroll, rows.length, virtualizer]);
 
   const items = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();

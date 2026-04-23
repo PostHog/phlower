@@ -22,13 +22,8 @@ class Config:
     aggregate_retention_hours: int = field(
         default_factory=lambda: int(os.environ.get("AGGREGATE_RETENTION_HOURS", "168"))
     )
-    max_global_invocations: int = field(
-        default_factory=lambda: int(os.environ.get("MAX_GLOBAL_INVOCATIONS", "100000"))
-    )
-    max_invocations_per_task: int = field(
-        default_factory=lambda: int(
-            os.environ.get("MAX_INVOCATIONS_PER_TASK", "10000")
-        )
+    sse_invocation_throttle_seconds: float = field(
+        default_factory=lambda: float(os.environ.get("SSE_INVOCATION_THROTTLE_SECONDS", "0.6"))
     )
     task_watchlist: tuple[str, ...] = field(
         default_factory=lambda: tuple(

@@ -1,6 +1,6 @@
 import { useParams, Link } from "react-router-dom";
-import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type ColumnDef } from "@tanstack/react-table";
 import {
   Chart as ChartJS,
@@ -108,54 +108,72 @@ export function TaskDetail() {
     refetchInterval: 30000,
   });
 
-  // Bidirectional infinite query:
-  // - fetchNextPage: load older records (scroll down / "Load older" button)
-  // - fetchPreviousPage: load newer records (SSE invocation_update signal)
-  const {
-    data: invPages,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
-    queryKey: ["tasks", name, "invocations"],
-    queryFn: ({ pageParam }) => {
-      if (!pageParam) {
-        // Initial fetch — no cursor
-        return api.taskInvocations(name, { limit: 100 });
+  // Log-style invocations: oldest first, new records append at bottom.
+  // Initial load fetches the latest batch, then SSE signals trigger
+  // incremental fetches via after_ts to append only new records.
+  const [invocations, setInvocations] = useState<InvocationRecord[]>([]);
+  const [hasOlder, setHasOlder] = useState(true);
+  const [pulse, setPulse] = useState(false);
+  const latestTs = useRef<number>(0);
+
+  // Initial load
+  useEffect(() => {
+    api.taskInvocations(name, { limit: 100 }).then((records) => {
+      const sorted = [...records].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
+      setInvocations(sorted);
+      setHasOlder(records.length >= 100);
+      if (sorted.length > 0) {
+        latestTs.current = Math.max(...sorted.map((r) => r.updated_at ?? 0));
       }
-      if (pageParam.direction === "older") {
-        return api.taskInvocations(name, { limit: 100, before_ts: pageParam.ts });
-      }
-      // "newer" — prepend
-      return api.taskInvocations(name, { limit: 100, after_ts: pageParam.ts });
-    },
-    initialPageParam: undefined as { direction: "older" | "newer"; ts: number } | undefined,
-    getNextPageParam: (lastPage) => {
-      if (lastPage.length === 0) return undefined;
-      const oldest = lastPage[lastPage.length - 1];
-      return oldest.received_at ? { direction: "older" as const, ts: oldest.received_at } : undefined;
-    },
-    getPreviousPageParam: (firstPage) => {
-      if (firstPage.length === 0) return undefined;
-      return firstPage[0].received_at ? { direction: "newer" as const, ts: firstPage[0].received_at } : undefined;
-    },
-    maxPages: 20,
-  });
+    });
+    return () => { setInvocations([]); latestTs.current = 0; };
+  }, [name]);
 
-  // Flatten all pages, deduplicate by task_id
-  const allInvocations = (invPages?.pages ?? []).flat();
-  const seen = new Set<string>();
-  const invocations = allInvocations.filter((inv) => {
-    if (seen.has(inv.task_id)) return false;
-    seen.add(inv.task_id);
-    return true;
-  });
+  // SSE-triggered incremental fetch — uses updated_at cursor to catch
+  // both new records and state transitions (RECEIVED→SUCCESS)
+  useEffect(() => {
+    const handler = () => {
+      if (!latestTs.current && invocations.length === 0) return;
+      api.taskInvocations(name, { limit: 500, after_ts: latestTs.current }).then((records) => {
+        if (records.length === 0) return;
+        setInvocations((prev) => {
+          const byId = new Map(prev.map((r) => [r.task_id, r]));
+          let changed = false;
+          for (const rec of records) {
+            const existing = byId.get(rec.task_id);
+            if (!existing || existing.state !== rec.state) {
+              byId.set(rec.task_id, rec);
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          return [...byId.values()].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
+        });
+        const maxTs = Math.max(...records.map((r) => r.updated_at ?? 0));
+        if (maxTs > latestTs.current) latestTs.current = maxTs;
+        setPulse(true);
+        setTimeout(() => setPulse(false), 400);
+      });
+    };
 
-  // Invocation updates are handled by useSSE invalidating the query directly.
+    window.addEventListener("phlower:invocation_update", handler);
+    return () => window.removeEventListener("phlower:invocation_update", handler);
+  }, [name, invocations.length]);
 
-  const loadMore = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const loadOlder = useCallback(() => {
+    if (invocations.length === 0) return;
+    const oldestTs = invocations[0].updated_at ?? invocations[0].received_at ?? 0;
+    api.taskInvocations(name, { limit: 100, before_ts: oldestTs }).then((records) => {
+      if (records.length === 0) { setHasOlder(false); return; }
+      const sorted = [...records].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0));
+      setInvocations((prev) => {
+        const seen = new Set(prev.map((r) => r.task_id));
+        const fresh = sorted.filter((r) => !seen.has(r.task_id));
+        return fresh.length > 0 ? [...fresh, ...prev] : prev;
+      });
+      setHasOlder(records.length >= 100);
+    });
+  }, [name, invocations]);
 
   if (!summary) return null;
 
@@ -318,29 +336,29 @@ export function TaskDetail() {
         </div>
       </div>
 
-      {/* Recent invocations — virtualized */}
-      <h2>Recent invocations</h2>
+      {/* Live invocations — log style, newest at bottom */}
+      <h2>
+        Live invocations
+        <span className={`pulse-dot${pulse ? " active" : ""}`} />
+      </h2>
+      {hasOlder && invocations.length > 0 && (
+        <button className="load-more load-older" onClick={loadOlder}>
+          ↑ Load older
+        </button>
+      )}
       {invocations.length > 0 ? (
-        <>
-          <DataTable
-            data={invocations}
-            columns={invocationColumns}
-            virtualize
-            estimateSize={38}
-            maxHeight={500}
-            initialSorting={[{ id: "received_at", desc: true }]}
-            getRowClassName={(inv) =>
-              inv.received_at != null && Date.now() / 1000 - inv.received_at < 5
-                ? "row-new"
-                : ""
-            }
-          />
-          {hasNextPage && (
-            <button className="load-more" onClick={loadMore} disabled={isFetchingNextPage}>
-              {isFetchingNextPage ? "Loading..." : "Load older"}
-            </button>
-          )}
-        </>
+        <DataTable
+          data={invocations}
+          columns={invocationColumns}
+          virtualize
+          autoScroll
+          estimateSize={38}
+          maxHeight={2100}
+          getRowClassName={(inv) => {
+            const ts = inv.updated_at ?? inv.received_at ?? 0;
+            return ts > 0 && Date.now() / 1000 - ts < 5 ? "row-new" : "";
+          }}
+        />
       ) : (
         <div className="empty-state"><p>No invocations recorded.</p></div>
       )}

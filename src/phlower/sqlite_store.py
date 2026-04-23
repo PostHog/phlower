@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Iterator
 
 from .models import InvocationRecord, TaskState
+
+
+def _serialized(method):
+    """Serialize access to the shared SQLite connection via _write_lock."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._write_lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +78,7 @@ class SQLiteStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._cached_row_count: int = 0
+        self._write_lock = threading.Lock()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
 
@@ -101,6 +113,7 @@ class SQLiteStore:
 
     # -- writes -----------------------------------------------------------
 
+    @_serialized
     def flush_batch(self, records: list) -> int:
         if not records:
             return 0
@@ -128,6 +141,7 @@ class SQLiteStore:
         self._conn.commit()
         return len(records)
 
+    @_serialized
     def thin_details(self, cutoff_ts: float) -> int:
         """NULL out heavy fields (args/kwargs/traceback) for old records.
         Processes in 10K batches to avoid long write locks."""
@@ -141,6 +155,7 @@ class SQLiteStore:
                 break
         return total
 
+    @_serialized
     def purge_expired(self, cutoff_ts: float) -> int:
         """Delete old rows in batches to avoid long write locks."""
         total = 0
@@ -290,6 +305,7 @@ class SQLiteStore:
 
     # -- metadata persistence -----------------------------------------------
 
+    @_serialized
     def save_metadata(self, key: str, values: list[str]) -> None:
         """Replace all values for a metadata key."""
         self._conn.execute("DELETE FROM metadata WHERE key = ?", (key,))
@@ -310,6 +326,7 @@ class SQLiteStore:
 
     # -- aggregate snapshots --------------------------------------------------
 
+    @_serialized
     def save_snapshots(self, snapshots: list[tuple[str, float, bytes]]) -> int:
         """Batch-upsert aggregate snapshots: (task_name, snapshot_ts, data)."""
         if not snapshots:
@@ -335,6 +352,7 @@ class SQLiteStore:
         ).fetchone()
         return row[0] if row and row[0] is not None else None
 
+    @_serialized
     def purge_stale_snapshots(self, active_tasks: set[str]) -> int:
         """Remove snapshots for tasks no longer tracked in memory."""
         if not active_tasks:
@@ -355,6 +373,7 @@ class SQLiteStore:
 
     # -- WAL management -----------------------------------------------------
 
+    @_serialized
     def checkpoint(self, *, truncate: bool = False) -> None:
         """Force WAL checkpoint.
 

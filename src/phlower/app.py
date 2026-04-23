@@ -92,18 +92,19 @@ async def _eviction_loop(store: Store, config: Config) -> None:
 async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
     """Batch flush completed invocations to SQLite every 1.5 seconds."""
     logger.info("SQLite flush loop started")
-    try:
-        while True:
-            await asyncio.sleep(1.5)
-            records = store.drain_completed_for_sqlite()
-            if records:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, sqlite_store.flush_batch, records)
-                logger.info("SQLite flush: %d records", len(records))
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("SQLite flush loop crashed")
+    while True:
+        await asyncio.sleep(1.5)
+        records = store.drain_completed_for_sqlite()
+        if not records:
+            continue
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, sqlite_store.flush_batch, records)
+            logger.info("SQLite flush: %d records", len(records))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("SQLite flush error (dropped %d records)", len(records))
 
 
 async def _aggregate_snapshot_loop(
@@ -115,11 +116,16 @@ async def _aggregate_snapshot_loop(
         dirty = store.drain_snapshot_dirty()
         if not dirty:
             continue
-        snapshots = store.snapshot_aggregates(dirty)
-        if snapshots:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
-            logger.info("Snapshot flush: %d tasks", len(snapshots))
+        try:
+            snapshots = store.snapshot_aggregates(dirty)
+            if snapshots:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
+                logger.info("Snapshot flush: %d tasks", len(snapshots))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Snapshot flush error")
 
 
 async def _background_recovery(store: Store, sqlite_store, config: Config) -> None:

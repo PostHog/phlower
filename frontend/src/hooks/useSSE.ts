@@ -73,23 +73,7 @@ export function useSSE() {
       });
 
       es.addEventListener("invocation_update", () => {
-        // Invalidate invocation queries so active detail pages refetch.
-        // Match both manual keys (["tasks", *, "invocations"], ["search", *])
-        // and generated keys ({ _id: "taskInvocations" | "searchInvocations" }).
-        queryClient.invalidateQueries({
-          predicate: (query) => {
-            const k0 = query.queryKey[0];
-            // Manual keys used by TaskDetail and Search pages
-            if (k0 === "tasks" && query.queryKey[2] === "invocations") return true;
-            if (k0 === "search") return true;
-            // Generated keys (future migration)
-            if (typeof k0 === "object" && k0 !== null && "_id" in k0) {
-              const id = (k0 as { _id: string })._id;
-              return id === "taskInvocations" || id === "searchInvocations";
-            }
-            return false;
-          },
-        });
+        window.dispatchEvent(new CustomEvent("phlower:invocation_update"));
       });
 
       es.onerror = () => {

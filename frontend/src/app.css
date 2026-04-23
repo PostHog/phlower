@@ -449,6 +449,22 @@ h3 {
 .load-more:disabled { color: var(--ink-muted); cursor: default;
   z-index: 1;
 }
+.load-older { margin-bottom: 4px; }
+
+.pulse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  margin-left: 8px;
+  vertical-align: middle;
+  transition: background 0.15s;
+}
+.pulse-dot.active {
+  background: #77B96C;
+  box-shadow: 0 0 6px #77B96C80;
+}
 
 .data-table td {
   padding: 8px 14px;

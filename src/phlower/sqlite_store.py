@@ -78,6 +78,8 @@ class SQLiteStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._cached_row_count: int = 0
+        self._cached_detail_row_count: int = 0
+        self._cached_oldest_at: float | None = None
         self._write_lock = threading.Lock()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
@@ -145,13 +147,17 @@ class SQLiteStore:
                 for r in records
             ],
         )
-        details = [
-            (r.task_id, r.args_preview, r.kwargs_preview, r.traceback_snippet)
-            for r in records
-            if r.args_preview or r.kwargs_preview or r.traceback_snippet
-        ]
+        details = []
+        detail_deletes = []
+        for r in records:
+            if r.args_preview or r.kwargs_preview or r.traceback_snippet:
+                details.append((r.task_id, r.args_preview, r.kwargs_preview, r.traceback_snippet))
+            else:
+                detail_deletes.append((r.task_id,))
         if details:
             self._conn.executemany(UPSERT_DETAILS_SQL, details)
+        if detail_deletes:
+            self._conn.executemany("DELETE FROM invocation_details WHERE task_id = ?", detail_deletes)
         self._conn.commit()
         return len(records)
 
@@ -180,25 +186,22 @@ class SQLiteStore:
         """Delete old core rows + their details in batches."""
         total = 0
         while True:
-            # Collect IDs to delete
-            ids = [
-                row[0] for row in self._conn.execute(
-                    "SELECT task_id FROM invocations WHERE finished_at < ? LIMIT 50000",
-                    (cutoff_ts,),
-                ).fetchall()
-            ]
-            if not ids:
-                break
-            placeholders = ",".join("?" for _ in ids)
             self._conn.execute(
-                f"DELETE FROM invocation_details WHERE task_id IN ({placeholders})", ids
+                "DELETE FROM invocation_details WHERE task_id IN ("
+                "  SELECT task_id FROM invocations WHERE finished_at < ? LIMIT 50000"
+                ")",
+                (cutoff_ts,),
             )
-            self._conn.execute(
-                f"DELETE FROM invocations WHERE task_id IN ({placeholders})", ids
+            cur = self._conn.execute(
+                "DELETE FROM invocations WHERE rowid IN ("
+                "  SELECT rowid FROM invocations WHERE finished_at < ? LIMIT 50000"
+                ")",
+                (cutoff_ts,),
             )
             self._conn.commit()
-            total += len(ids)
-            if len(ids) < 50000:
+            affected = cur.rowcount
+            total += affected
+            if affected < 50000:
                 break
         return total
 
@@ -385,20 +388,15 @@ class SQLiteStore:
         )
         yield from cur
 
-    def row_count(self) -> int:
+    @_serialized
+    def refresh_cached_stats(self) -> None:
+        """Update cached stats for healthz — called from purge loop."""
         row = self._conn.execute("SELECT count(*) FROM invocations").fetchone()
-        count = row[0] if row else 0
-        self._cached_row_count = count
-        return count
-
-    def details_row_count(self) -> int:
+        self._cached_row_count = row[0] if row else 0
         row = self._conn.execute("SELECT count(*) FROM invocation_details").fetchone()
-        return row[0] if row else 0
-
-    def oldest_finished_at(self) -> float | None:
-        """Oldest finished_at timestamp — O(1) via idx_inv_finished."""
+        self._cached_detail_row_count = row[0] if row else 0
         row = self._conn.execute("SELECT MIN(finished_at) FROM invocations").fetchone()
-        return row[0] if row and row[0] is not None else None
+        self._cached_oldest_at = row[0] if row and row[0] is not None else None
 
     def db_size_mb(self) -> float:
         """Approximate DB file size in MB."""

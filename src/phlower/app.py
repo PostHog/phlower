@@ -105,7 +105,7 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         if not records:
             continue
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, sqlite_store.flush_batch, records)
             store.remove_flushed([r.task_id for r in records])
             logger.info("SQLite flush: %d records", len(records))
@@ -127,7 +127,7 @@ async def _aggregate_snapshot_loop(
         try:
             snapshots = store.snapshot_aggregates(dirty)
             if snapshots:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, sqlite_store.save_snapshots, snapshots)
                 logger.info("Snapshot flush: %d tasks", len(snapshots))
         except asyncio.CancelledError:
@@ -140,7 +140,7 @@ async def _background_recovery(store: Store, sqlite_store, config: Config) -> No
     """Restore aggregates from snapshots, with gap replay for recent events."""
     from .sqlite_recovery import rebuild_aggregates, restore_from_snapshots
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         snapshot_ts = await loop.run_in_executor(
             None, restore_from_snapshots, store, sqlite_store
@@ -169,7 +169,7 @@ async def _sqlite_purge_loop(
     """Purge detail rows after SQLITE_DETAIL_HOURS, core rows after SQLITE_INVOCATION_RETENTION_HOURS."""
     while True:
         await asyncio.sleep(3600)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         now = time.time()
 
         # Disk pressure: if usage exceeds cap, halve the retention window
@@ -215,10 +215,15 @@ async def _sqlite_purge_loop(
         if consumer:
             consumer._persist_metadata()
 
+        # Refresh cached stats for healthz
+        await loop.run_in_executor(None, sqlite_store.refresh_cached_stats)
         size_mb = await loop.run_in_executor(None, sqlite_store.db_size_mb)
-        row_ct = await loop.run_in_executor(None, sqlite_store.row_count)
         wal_mb = await loop.run_in_executor(None, sqlite_store.wal_size_mb)
-        logger.info("SQLite: %.1f MB, %d rows, WAL: %.1f MB", size_mb, row_ct, wal_mb)
+        logger.info(
+            "SQLite: %.1f MB, %d rows (%d detail), WAL: %.1f MB, disk: %.0f%%",
+            size_mb, sqlite_store._cached_row_count,
+            sqlite_store._cached_detail_row_count, wal_mb, disk_pct,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +257,7 @@ async def lifespan(app: FastAPI):
         store = Store(config)
 
     broadcaster = SSEBroadcaster()
-    broadcaster.set_loop(asyncio.get_event_loop())
+    broadcaster.set_loop(asyncio.get_running_loop())
 
     consumer = CeleryEventConsumer(config, store, sqlite_store=sqlite_store)
     consumer.seed_registry_from_sqlite()

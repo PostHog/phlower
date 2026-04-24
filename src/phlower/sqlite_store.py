@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -34,13 +35,17 @@ CREATE TABLE IF NOT EXISTS invocations (
     runtime_ms  REAL,
     worker      TEXT,
     queue       TEXT,
-    exception_type TEXT,
-    args_preview TEXT,
-    kwargs_preview TEXT,
-    traceback_snippet TEXT
+    exception_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inv_finished ON invocations (finished_at);
 CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished_at);
+
+CREATE TABLE IF NOT EXISTS invocation_details (
+    task_id            TEXT PRIMARY KEY,
+    args_preview       TEXT,
+    kwargs_preview     TEXT,
+    traceback_snippet  TEXT
+);
 
 CREATE TABLE IF NOT EXISTS metadata (
     key   TEXT NOT NULL,
@@ -58,19 +63,14 @@ CREATE TABLE IF NOT EXISTS aggregate_snapshots (
 UPSERT_SQL = """
 INSERT OR REPLACE INTO invocations
     (task_id, task_name, state, received_at, started_at, finished_at,
-     runtime_ms, worker, queue, exception_type,
-     args_preview, kwargs_preview, traceback_snippet)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     runtime_ms, worker, queue, exception_type)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
-THIN_SQL = """
-UPDATE invocations
-SET args_preview=NULL, kwargs_preview=NULL, traceback_snippet=NULL
-WHERE rowid IN (
-    SELECT rowid FROM invocations
-    WHERE finished_at < ? AND args_preview IS NOT NULL
-    LIMIT 10000
-)
+UPSERT_DETAILS_SQL = """
+INSERT OR REPLACE INTO invocation_details
+    (task_id, args_preview, kwargs_preview, traceback_snippet)
+VALUES (?, ?, ?, ?)
 """
 
 
@@ -78,6 +78,8 @@ class SQLiteStore:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._cached_row_count: int = 0
+        self._cached_detail_row_count: int = 0
+        self._cached_oldest_at: float | None = None
         self._write_lock = threading.Lock()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
@@ -101,15 +103,32 @@ class SQLiteStore:
         self.checkpoint(truncate=True)
 
     def _migrate(self) -> None:
-        """Add columns that may not exist in older databases."""
+        """Migrate from single-table to split-table schema if needed."""
         cols = {
             row[1]
             for row in self._conn.execute("PRAGMA table_info(invocations)").fetchall()
         }
+        if "args_preview" not in cols:
+            return
+
+        logger.info("Migrating to split-table schema (invocations + invocation_details)")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS invocation_details ("
+            "  task_id TEXT PRIMARY KEY,"
+            "  args_preview TEXT,"
+            "  kwargs_preview TEXT,"
+            "  traceback_snippet TEXT"
+            ")"
+        )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO invocation_details (task_id, args_preview, kwargs_preview, traceback_snippet) "
+            "SELECT task_id, args_preview, kwargs_preview, traceback_snippet "
+            "FROM invocations WHERE args_preview IS NOT NULL OR kwargs_preview IS NOT NULL OR traceback_snippet IS NOT NULL"
+        )
         for col in ("args_preview", "kwargs_preview", "traceback_snippet"):
-            if col not in cols:
-                self._conn.execute(f"ALTER TABLE invocations ADD COLUMN {col} TEXT")
+            self._conn.execute(f"ALTER TABLE invocations DROP COLUMN {col}")
         self._conn.commit()
+        logger.info("Split-table migration complete")
 
     # -- writes -----------------------------------------------------------
 
@@ -121,48 +140,61 @@ class SQLiteStore:
             UPSERT_SQL,
             [
                 (
-                    r.task_id,
-                    r.task_name,
-                    r.state,
-                    r.received_at,
-                    r.started_at,
-                    r.finished_at,
-                    r.runtime_ms,
-                    r.worker,
-                    r.queue,
-                    r.exception_type,
-                    r.args_preview,
-                    r.kwargs_preview,
-                    r.traceback_snippet,
+                    r.task_id, r.task_name, r.state,
+                    r.received_at, r.started_at, r.finished_at,
+                    r.runtime_ms, r.worker, r.queue, r.exception_type,
                 )
                 for r in records
             ],
         )
+        details = []
+        detail_deletes = []
+        for r in records:
+            if r.args_preview or r.kwargs_preview or r.traceback_snippet:
+                details.append((r.task_id, r.args_preview, r.kwargs_preview, r.traceback_snippet))
+            else:
+                detail_deletes.append((r.task_id,))
+        if details:
+            self._conn.executemany(UPSERT_DETAILS_SQL, details)
+        if detail_deletes:
+            self._conn.executemany("DELETE FROM invocation_details WHERE task_id = ?", detail_deletes)
         self._conn.commit()
         return len(records)
 
     @_serialized
-    def thin_details(self, cutoff_ts: float) -> int:
-        """NULL out heavy fields (args/kwargs/traceback) for old records.
-        Processes in 10K batches to avoid long write locks."""
+    def purge_details(self, cutoff_ts: float) -> int:
+        """Delete detail rows for invocations finished before cutoff."""
         total = 0
         while True:
-            cur = self._conn.execute(THIN_SQL, (cutoff_ts,))
+            cur = self._conn.execute(
+                "DELETE FROM invocation_details WHERE task_id IN ("
+                "  SELECT d.task_id FROM invocation_details d"
+                "  JOIN invocations i ON d.task_id = i.task_id"
+                "  WHERE i.finished_at < ? LIMIT 50000"
+                ")",
+                (cutoff_ts,),
+            )
             self._conn.commit()
             affected = cur.rowcount
             total += affected
-            if affected < 10000:
+            if affected < 50000:
                 break
         return total
 
     @_serialized
     def purge_expired(self, cutoff_ts: float) -> int:
-        """Delete old rows in batches to avoid long write locks."""
+        """Delete old core rows + their details in batches."""
         total = 0
         while True:
+            self._conn.execute(
+                "DELETE FROM invocation_details WHERE task_id IN ("
+                "  SELECT task_id FROM invocations WHERE finished_at < ? LIMIT 50000"
+                ")",
+                (cutoff_ts,),
+            )
             cur = self._conn.execute(
                 "DELETE FROM invocations WHERE rowid IN ("
-                "SELECT rowid FROM invocations WHERE finished_at < ? LIMIT 50000"
+                "  SELECT rowid FROM invocations WHERE finished_at < ? LIMIT 50000"
                 ")",
                 (cutoff_ts,),
             )
@@ -177,7 +209,10 @@ class SQLiteStore:
 
     def lookup_task_id(self, task_id: str) -> InvocationRecord | None:
         row = self._conn.execute(
-            "SELECT * FROM invocations WHERE task_id = ?", (task_id,)
+            "SELECT i.*, d.args_preview, d.kwargs_preview, d.traceback_snippet "
+            "FROM invocations i LEFT JOIN invocation_details d ON i.task_id = d.task_id "
+            "WHERE i.task_id = ?",
+            (task_id,),
         ).fetchone()
         if row is None:
             return None
@@ -193,18 +228,21 @@ class SQLiteStore:
         exclude_ids: set[str] | None = None,
     ) -> list[InvocationRecord]:
         """List invocations for a task, newest first. Uses idx_inv_task_name."""
-        clauses = ["task_name = ?"]
+        clauses = ["i.task_name = ?"]
         params: list[object] = [task_name]
         if before_ts is not None:
-            clauses.append("finished_at < ?")
+            clauses.append("i.finished_at < ?")
             params.append(before_ts)
         if after_ts is not None:
-            clauses.append("finished_at > ?")
+            clauses.append("i.finished_at > ?")
             params.append(after_ts)
         where = " AND ".join(clauses)
-        # Fetch extra rows to compensate for exclude_ids filtering
         fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
-        sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ?"
+        sql = (
+            "SELECT i.*, d.args_preview, d.kwargs_preview, d.traceback_snippet "
+            "FROM invocations i LEFT JOIN invocation_details d ON i.task_id = d.task_id "
+            f"WHERE {where} ORDER BY i.finished_at DESC LIMIT ?"
+        )
         params.append(fetch_limit)
         rows = self._conn.execute(sql, params).fetchall()
         results: list[InvocationRecord] = []
@@ -233,35 +271,39 @@ class SQLiteStore:
         clauses: list[str] = []
         params: list[object] = []
         if task_name:
-            clauses.append("task_name = ?")
+            clauses.append("i.task_name = ?")
             params.append(task_name)
         if state:
-            clauses.append("state = ?")
+            clauses.append("i.state = ?")
             params.append(state)
         if worker:
-            clauses.append("worker = ?")
+            clauses.append("i.worker = ?")
             params.append(worker)
         if queue:
-            clauses.append("queue = ?")
+            clauses.append("i.queue = ?")
             params.append(queue)
         if time_from:
-            clauses.append("finished_at >= ?")
+            clauses.append("i.finished_at >= ?")
             params.append(time_from)
         if time_to:
-            clauses.append("finished_at <= ?")
+            clauses.append("i.finished_at <= ?")
             params.append(time_to)
         if q:
             clauses.append(
-                "(task_id LIKE ? OR task_name LIKE ? OR args_preview LIKE ?"
-                " OR kwargs_preview LIKE ? OR exception_type LIKE ?"
-                " OR worker LIKE ? OR queue LIKE ?)"
+                "(i.task_id LIKE ? OR i.task_name LIKE ? OR d.args_preview LIKE ?"
+                " OR d.kwargs_preview LIKE ? OR i.exception_type LIKE ?"
+                " OR i.worker LIKE ? OR i.queue LIKE ?)"
             )
             pattern = f"%{q}%"
             params.extend([pattern] * 7)
 
         where = " AND ".join(clauses) if clauses else "1=1"
         fetch_limit = limit + (len(exclude_ids) if exclude_ids else 0)
-        sql = f"SELECT * FROM invocations WHERE {where} ORDER BY finished_at DESC LIMIT ? OFFSET ?"
+        sql = (
+            "SELECT i.*, d.args_preview, d.kwargs_preview, d.traceback_snippet "
+            "FROM invocations i LEFT JOIN invocation_details d ON i.task_id = d.task_id "
+            f"WHERE {where} ORDER BY i.finished_at DESC LIMIT ? OFFSET ?"
+        )
         params.extend([fetch_limit, offset])
         rows = self._conn.execute(sql, params).fetchall()
         results: list[InvocationRecord] = []
@@ -346,11 +388,15 @@ class SQLiteStore:
         )
         yield from cur
 
-    def row_count(self) -> int:
+    @_serialized
+    def refresh_cached_stats(self) -> None:
+        """Update cached stats for healthz — called from purge loop."""
         row = self._conn.execute("SELECT count(*) FROM invocations").fetchone()
-        count = row[0] if row else 0
-        self._cached_row_count = count
-        return count
+        self._cached_row_count = row[0] if row else 0
+        row = self._conn.execute("SELECT count(*) FROM invocation_details").fetchone()
+        self._cached_detail_row_count = row[0] if row else 0
+        row = self._conn.execute("SELECT MIN(finished_at) FROM invocations").fetchone()
+        self._cached_oldest_at = row[0] if row and row[0] is not None else None
 
     def db_size_mb(self) -> float:
         """Approximate DB file size in MB."""
@@ -467,7 +513,29 @@ class SQLiteStore:
 
     # -- helpers ----------------------------------------------------------
 
+    def disk_usage_pct(self) -> float:
+        """Percentage of disk used on the partition hosting the DB file."""
+        try:
+            stat = os.statvfs(self.db_path)
+            total = stat.f_blocks * stat.f_frsize
+            free = stat.f_bavail * stat.f_frsize
+            if total == 0:
+                return 0.0
+            return (1 - free / total) * 100
+        except OSError:
+            return 0.0
+
+    def disk_free_mb(self) -> float:
+        """Free disk space in MB on the partition hosting the DB file."""
+        try:
+            stat = os.statvfs(self.db_path)
+            return (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
+        except OSError:
+            return 0.0
+
     def _row_to_record(self, row: tuple) -> InvocationRecord:
+        # Core columns: 0-9 (task_id..exception_type)
+        # Detail columns from LEFT JOIN: 10-12 (args_preview, kwargs_preview, traceback_snippet)
         return InvocationRecord(
             task_id=row[0],
             task_name=row[1],

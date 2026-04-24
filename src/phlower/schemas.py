@@ -203,6 +203,10 @@ class HealthResponse(BaseModel):
     tasks_tracked: int
     invocations_stored: int
     sqlite_rows: int | None
+    sqlite_detail_rows: int | None
+    sqlite_oldest_at: float | None
+    disk_usage_pct: float | None
+    disk_free_mb: float | None
     sse_clients: int
     queues: list[str]
     worker_groups: list[str]

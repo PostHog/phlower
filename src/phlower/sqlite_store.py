@@ -120,15 +120,28 @@ class SQLiteStore:
             "  traceback_snippet TEXT"
             ")"
         )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO invocation_details (task_id, args_preview, kwargs_preview, traceback_snippet) "
-            "SELECT task_id, args_preview, kwargs_preview, traceback_snippet "
-            "FROM invocations WHERE args_preview IS NOT NULL OR kwargs_preview IS NOT NULL OR traceback_snippet IS NOT NULL"
-        )
+        self._conn.commit()
+        total = 0
+        while True:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO invocation_details (task_id, args_preview, kwargs_preview, traceback_snippet) "
+                "SELECT task_id, args_preview, kwargs_preview, traceback_snippet "
+                "FROM invocations "
+                "WHERE (args_preview IS NOT NULL OR kwargs_preview IS NOT NULL OR traceback_snippet IS NOT NULL) "
+                "AND task_id NOT IN (SELECT task_id FROM invocation_details) "
+                "LIMIT 50000"
+            )
+            self._conn.commit()
+            batch = cur.rowcount
+            total += batch
+            if batch > 0:
+                logger.info("Migration progress: %d rows copied", total)
+            if batch < 50000:
+                break
         for col in ("args_preview", "kwargs_preview", "traceback_snippet"):
             self._conn.execute(f"ALTER TABLE invocations DROP COLUMN {col}")
         self._conn.commit()
-        logger.info("Split-table migration complete")
+        logger.info("Split-table migration complete — %d detail rows", total)
 
     # -- writes -----------------------------------------------------------
 

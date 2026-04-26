@@ -1,8 +1,18 @@
-# Frontend design brief
+# Phlower
 
-Phlower's frontend follows a **Bloomberg-style, information-dense internal tool** aesthetic. The design targets a nerdy, printed-ledger feel — no cards, no rounded corners, no shadows, no gradients. Motion is near-zero: the only animation is the heartbeat pulse dot.
+## Design philosophy
 
-## Design DNA
+Dense, numeric, data-forward UI. Information-dense internal tool aesthetic — nerdy, printed-ledger feel. No cards, no rounded corners, no shadows, no gradients. Motion is near-zero: the only animation is the heartbeat pulse dot.
+
+Show actual numeric values (0-100 scores, raw metrics), not icons or simplified visual indicators. Optimize for information density and scannability. Monospace numbers, tabular alignment, subtle color heat for magnitude.
+
+## Public repo guidelines
+
+Phlower is open source. Commits, PRs, and code comments must not reference internal infrastructure — no cluster names, pod names, restart counts, specific memory numbers, or deployment details. Describe problems and solutions generically ("large databases", "high-throughput environments") not as deployment incidents.
+
+## Frontend design brief
+
+### Design DNA
 
 - **1px rules everywhere.** Shared gridlines via `border-right + border-bottom` on panes, `border-bottom` on rows. No doubled borders.
 - **Zero border-radius** except the filter chip (4px) and scrollbar thumb.
@@ -11,34 +21,21 @@ Phlower's frontend follows a **Bloomberg-style, information-dense internal tool*
 - **Warm off-white palette.** Background `#F5F3EE`, sidebar `#EFEDE7`, not clinical white.
 - **PostHog accent orange `#F54E00`** for selection, active states, bookmarks. Amber `#F5A623` for warnings/retries. Red `#E5484D` for failures. Green `#2FBF71` for success/heartbeat. Blue `#1D4AFF` for sparklines and active counts.
 
-## Layout
+### Layout
 
 Two-pane: **left sidebar** (220px, fixed) + **right main** (flex, full remaining width). Topbar is 42px with wordmark, nav tabs (Tasks / Search), and heartbeat ticker (tasks/s + pulse dot).
 
-### Sidebar
-- Queue facets and Worker facets as ledger rows: label + optional mini sparkline (36×12) + right-aligned count.
-- Active facet: 2px left border in accent, background tint `rgba(245,78,0,0.07)`.
-- Section headers: uppercase 10px Inter 600, letter-spacing 0.08em.
+**Sidebar** — Queue facets and Worker facets as ledger rows: label + worker count + optional mini sparkline (36×12) + right-aligned task count. Active facet: 2px left border in accent, background tint. Section headers: uppercase 10px Inter 600, letter-spacing 0.08em.
 
-### Task list (pure grid)
-Full-width table, no outer border. Columns: bookmark icon | status dot + task name | 1h sparkline | rate | active | fail/retry | p50 | p95 | p99. Row height 34px. Sticky header. Hover = `#F2EFE8`. Selected = accent tint + 2px left border.
+**Task list** — Full-width table, no outer border. Columns: bookmark icon | status dot + task name | 1h sparkline | rate | active | fail/retry | p50 | p95 | p99 | Ovhd | Bneck | FImp. Row height 34px. Sticky header. Sortable columns.
 
-### Task detail (Bloomberg 12-col grid)
-`display: grid; grid-template-columns: repeat(12, 1fr)`. Each pane has `border-right + border-bottom` only — outer container has `border-top + border-left`. Pane headers: uppercase 10px label, optional right-aligned dim meta.
+**Task detail** — 12-col CSS grid. Each pane has `border-right + border-bottom` only — outer container has `border-top + border-left`. Row 1: 6 number panes. Row 2: 6 latency panes. Row 3: charts. Row 4: workers + failures. Below the grid: virtualized invocations ledger (TanStack Virtual).
 
-Row 1: 6 number panes (rate, total, success, fail rate, active, retries).
-Row 2: 6 latency panes (p50–max).
-Row 3: latency chart + throughput chart (span 6 each).
-Row 4: workers (bar chart) + failures by class.
-Below the grid: recent invocations ledger with search, virtualized via TanStack Virtual.
+**Search** — Left rail (240px) with state/queue checkboxes. Main area: free-text search bar + results table.
 
-### Search (S2 faceted rail)
-Left rail (240px): state checkboxes (SUCCESS/FAILURE/RETRY with color dots), queue checkboxes, time range. Main area: free-text search bar + results table.
+**Invocation detail** — Header with back link, task ID, state badge. Lifecycle timeline (horizontal SVG bar). Two-column body: metadata ledger (left 320px) + code blocks (right).
 
-### Invocation detail (I1 timeline-first)
-Header with back link, task ID, state badge. Lifecycle timeline (horizontal SVG bar). Two-column body: metadata ledger (left 320px) + code blocks (right, args/kwargs/result/traceback).
-
-## Typography scale
+### Typography
 
 | Use | Font | Size | Weight |
 |-----|------|------|--------|
@@ -49,9 +46,8 @@ Header with back link, task ID, state badge. Lifecycle timeline (horizontal SVG 
 | Runs rows | Mono | 10.5px | 400 |
 | Section labels | Inter | 10px | 600, uppercase |
 | Column headers | Inter | 10.5px | 500 |
-| Nav tabs | Inter | 12.5px | 500/600 |
 
-## Color tokens (light theme)
+### Color tokens (light theme)
 
 ```
 bg:            #F5F3EE     surface:       #FFFFFF
@@ -65,31 +61,13 @@ dotOk:         #CFCABE     rowHover:      #F2EFE8
 rowSelected:   rgba(245, 78, 0, 0.07)
 ```
 
-## Logo
+### Logo
 
 Wordmark "Phlower" with colored first letters: P = blue `#1D4AFF`, h = red `#F54E00`, l = yellow `#F1A82C`, "ower" = foreground black. Small flower SVG icon (5 circles) beside it.
 
-## Interactions
-
-- No page transitions. Instant. The only motion is the heartbeat dot pulse (opacity 1→0.35→1, 1.6s linear infinite).
-- Row hover: instant background color swap.
-- Facet click filters table, shows filter chip in header.
-- Invocation rows navigate directly to detail on click.
-- Charts use Chart.js with 1px strokes, no interior padding or axis titles.
-
-## Data layer
+### Data layer
 
 - TanStack Query for fetching, TanStack Virtual for large lists.
 - SSE stream (`/api/stream`) pushes task_update, sparkline_update, invocation_update events.
 - SSE merges diffs into query cache — no full refetches.
 - Bookmarks persisted in localStorage.
-
-## Reference design files
-
-The design was prototyped in HTML/React+Babel. Reference files are in `/tmp/phlower_design_extract/phlower/project/design_handoff_phlower/reference_design/`:
-- `phlower-shell.jsx` — tokens, sidebar, topbar
-- `phlower-table.jsx` — task table, sparkline, formatters
-- `phlower-detail.jsx` — Bloomberg grid detail (V2 is the chosen variant)
-- `phlower-detail-primitives.jsx` — charts, data generator
-- `phlower-search.jsx` — search variants (S2 is chosen)
-- `phlower-invocation.jsx` — invocation variants (I1 is chosen)

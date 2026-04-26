@@ -5,13 +5,13 @@ interface Props {
   size?: number;
 }
 
-export function BookmarkButton({ taskName, size = 14 }: Props) {
+export function BookmarkButton({ taskName, size = 10 }: Props) {
   const { toggle, isBookmarked } = useBookmarks();
   const active = isBookmarked(taskName);
 
   return (
     <button
-      className={`bm-btn${active ? " bm-active" : ""}`}
+      className={`bm-btn${active ? " active" : ""}`}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -19,17 +19,15 @@ export function BookmarkButton({ taskName, size = 14 }: Props) {
       }}
       title="Bookmark"
     >
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill={active ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+      <svg width={size} height={Math.round(size * 1.2)} viewBox="0 0 10 12" style={{ display: "block" }}>
+        <path
+          d="M1.5 1.5h7v9L5 8 1.5 10.5v-9z"
+          fill={active ? "currentColor" : "none"}
+          stroke="currentColor"
+          strokeWidth="1"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
       </svg>
     </button>
   );

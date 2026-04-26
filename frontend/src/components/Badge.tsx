@@ -1,21 +1,26 @@
-const stateClass: Record<string, string> = {
-  SUCCESS: "st-success",
-  FAILURE: "st-failure",
-  RETRY: "st-retry",
-  STARTED: "st-active",
-  RECEIVED: "st-pending",
-  REVOKED: "st-revoked",
-};
-
 interface Props {
   state: string;
   small?: boolean;
 }
 
-export function Badge({ state, small }: Props) {
-  return (
-    <span className={`badge ${small ? "sm" : ""} ${stateClass[state] || ""}`}>
-      {state}
-    </span>
-  );
+export function Badge({ state }: Props) {
+  const cls =
+    state === "SUCCESS" ? "success" :
+    state === "FAILURE" ? "failure" :
+    state === "RETRY" ? "retry" :
+    state === "STARTED" ? "started" :
+    "received";
+
+  return <span className={`state-badge ${cls}`}>{state}</span>;
+}
+
+export function StateLabel({ state }: { state: string }) {
+  const cls =
+    state === "SUCCESS" ? "success" :
+    state === "FAILURE" ? "failure" :
+    state === "RETRY" ? "retry" :
+    state === "STARTED" ? "started" :
+    "received";
+
+  return <span className={`state-label ${cls}`}>{state}</span>;
 }

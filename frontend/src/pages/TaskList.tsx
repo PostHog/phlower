@@ -10,6 +10,29 @@ import { Sparkline } from "../components/Sparkline";
 import { DataTable } from "../components/DataTable";
 import { fmtMs, fmtNum, fmtRate, fmtPerMin, shortTaskName } from "../util";
 
+function computeScores(tasks: TaskSummary[]) {
+  const maxRate = Math.max(...tasks.map((t) => t.rate_per_min), 1e-9);
+  const maxP50 = Math.max(...tasks.map((t) => t.p50_ms ?? 0), 1e-9);
+  const maxFailRate = Math.max(...tasks.map((t) => t.failure_rate), 1e-9);
+
+  return new Map(
+    tasks.map((t) => {
+      const rateNorm = t.rate_per_min / maxRate;
+      const p50Norm = (t.p50_ms ?? 0) / maxP50;
+      const failNorm = t.failure_rate / maxFailRate;
+
+      return [
+        t.task_name,
+        {
+          ovhd: Math.round(rateNorm * (1 - p50Norm) * 100),
+          bneck: Math.round(rateNorm * p50Norm * 100),
+          fimp: Math.round(failNorm * rateNorm * 100),
+        },
+      ] as const;
+    })
+  );
+}
+
 export function TaskList() {
   const { data: tasks = [] } = useQuery({ ...listTasksOptions() });
 
@@ -27,6 +50,8 @@ export function TaskList() {
     () => computeQueueSparklines(tasks, meta?.queues || []),
     [tasks, meta?.queues]
   );
+
+  const scores = useMemo(() => computeScores(tasks), [tasks]);
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -117,8 +142,32 @@ export function TaskList() {
         meta: { className: "r num" },
         cell: ({ row }) => fmtMs(row.original.p99_ms),
       },
+      {
+        id: "ovhd",
+        accessorFn: (row) => scores.get(row.task_name)?.ovhd ?? 0,
+        header: () => <span title="High rate + low p50 — async overhead signal">Ovhd</span>,
+        meta: { className: "r num" },
+        size: 60,
+        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.ovhd ?? 0} />,
+      },
+      {
+        id: "bneck",
+        accessorFn: (row) => scores.get(row.task_name)?.bneck ?? 0,
+        header: () => <span title="High rate + high p50 — bottleneck">Bneck</span>,
+        meta: { className: "r num" },
+        size: 60,
+        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.bneck ?? 0} />,
+      },
+      {
+        id: "fimp",
+        accessorFn: (row) => scores.get(row.task_name)?.fimp ?? 0,
+        header: () => <span title="High failure rate + high volume — failure impact">FImp</span>,
+        meta: { className: "r num" },
+        size: 60,
+        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.fimp ?? 0} />,
+      },
     ],
-    [isBookmarked]
+    [isBookmarked, scores]
   );
 
   const getRowClassName = (t: TaskSummary) => {
@@ -226,6 +275,16 @@ function FilterPill({
         <span className="pill-wait">{fmtMs(waitMs)}</span>
       )}
     </button>
+  );
+}
+
+function ScoreCell({ value }: { value: number }) {
+  if (value === 0) return <span className="score-cell score-zero">—</span>;
+  const cls = value >= 70 ? "score-high" : value >= 30 ? "score-mid" : "score-low";
+  return (
+    <span className={`score-cell ${cls}`} title={String(value)}>
+      {value}
+    </span>
   );
 }
 

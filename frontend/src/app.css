@@ -566,6 +566,23 @@ h3 {
 .bm-row:hover { background: #F1A82C18; }
 
 /* ═══════════════════════════════════════════════════════
+   SCORE COLUMNS
+   ═══════════════════════════════════════════════════════ */
+
+.score-cell {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.score-zero { color: var(--ink-muted); }
+.score-low  { color: var(--ink-2); background: var(--bg); }
+.score-mid  { color: #b8860b; background: var(--yellow-bg); }
+.score-high { color: var(--red); background: var(--red-bg); }
+
+/* ═══════════════════════════════════════════════════════
    CHARTS
    ═══════════════════════════════════════════════════════ */
 

@@ -1,14 +1,16 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
-import { type ColumnDef } from "@tanstack/react-table";
+import { useNavigate } from "react-router-dom";
 import type { TaskSummary } from "../api/client";
 import { listTasksOptions, metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { useBookmarks } from "../hooks/useBookmarks";
 import { BookmarkButton } from "../components/BookmarkButton";
 import { Sparkline } from "../components/Sparkline";
-import { DataTable } from "../components/DataTable";
-import { fmtMs, fmtNum, fmtRate, fmtPerMin, shortTaskName } from "../util";
+import { StatusDot } from "../components/StatusDot";
+import { fmtMs, fmtPerMin, fmtRate, shortTaskName } from "../util";
+
+type SortKey = "task_name" | "sparkline_sum" | "rate_per_min" | "active_count" | "failure_rate" | "p50_ms" | "p95_ms" | "p99_ms" | "ovhd" | "bneck" | "fimp";
+type SortDir = "asc" | "desc";
 
 function computeScores(tasks: TaskSummary[]) {
   const maxRate = Math.max(...tasks.map((t) => t.rate_per_min), 1e-9);
@@ -20,7 +22,6 @@ function computeScores(tasks: TaskSummary[]) {
       const rateNorm = t.rate_per_min / maxRate;
       const p50Norm = (t.p50_ms ?? 0) / maxP50;
       const failNorm = t.failure_rate / maxFailRate;
-
       return [
         t.task_name,
         {
@@ -35,210 +36,267 @@ function computeScores(tasks: TaskSummary[]) {
 
 export function TaskList() {
   const { data: tasks = [] } = useQuery({ ...listTasksOptions() });
-
-  const { data: meta } = useQuery({
-    ...metaOptions(),
-    refetchInterval: 30000,
-  });
-
+  const { data: meta } = useQuery({ ...metaOptions(), refetchInterval: 30000 });
   const { isBookmarked } = useBookmarks();
-  const [queueFilter, setQueueFilter] = useState("");
-  const [groupFilter, setGroupFilter] = useState("");
+  const navigate = useNavigate();
 
-  // Aggregate sparklines per queue from task data
+  const [queueFilter, setQueueFilter] = useState("__all");
+  const [workerFilter, setWorkerFilter] = useState("__all");
+  const [sortKey, setSortKey] = useState<SortKey>("task_name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  const scores = useMemo(() => computeScores(tasks), [tasks]);
+
   const queueSparklines = useMemo(
     () => computeQueueSparklines(tasks, meta?.queues || []),
     [tasks, meta?.queues]
   );
 
-  const scores = useMemo(() => computeScores(tasks), [tasks]);
-
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
-      if (queueFilter && !t.top_queues.some((q) => q.queue === queueFilter))
-        return false;
-      if (groupFilter && !t.top_workers.some((w) => w.worker.includes(groupFilter)))
-        return false;
+      if (queueFilter !== "__all" && !t.top_queues.some((q) => q.queue === queueFilter)) return false;
+      if (workerFilter !== "__all" && !t.top_workers.some((w) => w.worker.includes(workerFilter))) return false;
       return true;
     });
-  }, [tasks, queueFilter, groupFilter]);
+  }, [tasks, queueFilter, workerFilter]);
 
-  const columns = useMemo<ColumnDef<TaskSummary, unknown>[]>(
-    () => [
-      {
-        id: "bookmark",
-        accessorFn: (row) => (isBookmarked(row.task_name) ? 1 : 0),
-        header: "",
-        size: 36,
-        meta: { className: "col-bm" },
-        cell: ({ row }) => <BookmarkButton taskName={row.original.task_name} />,
-      },
-      {
-        accessorKey: "task_name",
-        header: "Task",
-        cell: ({ row }) => (
-          <Link
-            to={`/tasks/${encodeURIComponent(row.original.task_name)}`}
-            className="mono truncate"
-            title={row.original.task_name}
-          >
-            {shortTaskName(row.original.task_name)}
-          </Link>
-        ),
-      },
-      {
-        id: "sparkline",
-        accessorFn: (row) => row.sparkline.reduce((a, b) => a + b, 0),
-        header: "1 h",
-        meta: { className: "col-spark" },
-        cell: ({ row }) => <Sparkline values={row.original.sparkline} />,
-      },
-      {
-        accessorKey: "rate_per_min",
-        header: "Rate",
-        meta: { className: "r num" },
-        cell: ({ row }) => fmtPerMin(row.original.rate_per_min),
-      },
-      {
-        accessorKey: "active_count",
-        header: "Active",
-        meta: { className: "r num" },
-      },
-      {
-        accessorKey: "failure_rate",
-        header: "Fail / Retry",
-        meta: { className: "r num" },
-        cell: ({ row }) => {
-          const { failure_rate, retry_count } = row.original;
-          return (
-            <span>
-              <span className={failure_rate > 0.05 ? "txt-fail" : ""}>
-                {fmtRate(failure_rate)}
-              </span>
-              {retry_count > 0 && (
-                <span className="txt-retry" title={`${retry_count} retries`}>
-                  {" "}/ {fmtNum(retry_count)}
-                </span>
-              )}
-            </span>
-          );
-        },
-      },
-      {
-        accessorKey: "p50_ms",
-        header: "p50",
-        meta: { className: "r num" },
-        cell: ({ row }) => fmtMs(row.original.p50_ms),
-      },
-      {
-        accessorKey: "p95_ms",
-        header: "p95",
-        meta: { className: "r num" },
-        cell: ({ row }) => fmtMs(row.original.p95_ms),
-      },
-      {
-        accessorKey: "p99_ms",
-        header: "p99",
-        meta: { className: "r num" },
-        cell: ({ row }) => fmtMs(row.original.p99_ms),
-      },
-      {
-        id: "ovhd",
-        accessorFn: (row) => scores.get(row.task_name)?.ovhd ?? 0,
-        header: () => <span title="High rate + low p50 — async overhead signal">Ovhd</span>,
-        meta: { className: "r num" },
-        size: 60,
-        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.ovhd ?? 0} />,
-      },
-      {
-        id: "bneck",
-        accessorFn: (row) => scores.get(row.task_name)?.bneck ?? 0,
-        header: () => <span title="High rate + high p50 — bottleneck">Bneck</span>,
-        meta: { className: "r num" },
-        size: 60,
-        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.bneck ?? 0} />,
-      },
-      {
-        id: "fimp",
-        accessorFn: (row) => scores.get(row.task_name)?.fimp ?? 0,
-        header: () => <span title="High failure rate + high volume — failure impact">FImp</span>,
-        meta: { className: "r num" },
-        size: 60,
-        cell: ({ row }) => <ScoreCell value={scores.get(row.original.task_name)?.fimp ?? 0} />,
-      },
-    ],
-    [isBookmarked, scores]
-  );
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      const aB = isBookmarked(a.task_name) ? 1 : 0;
+      const bB = isBookmarked(b.task_name) ? 1 : 0;
+      if (aB !== bB) return bB - aB;
 
-  const getRowClassName = (t: TaskSummary) => {
-    const classes: string[] = [];
-    if (t.failure_rate > 0.25) classes.push("row-crit");
-    else if (t.failure_rate > 0.1) classes.push("row-warn");
-    else if (t.retry_count > 0 && t.retry_count / Math.max(t.total_count, 1) > 0.1) classes.push("row-warn");
-    if (isBookmarked(t.task_name)) classes.push("bm-row");
-    return classes.join(" ");
-  };
+      let cmp = 0;
+      if (sortKey === "task_name") {
+        cmp = a.task_name.localeCompare(b.task_name);
+      } else if (sortKey === "sparkline_sum") {
+        cmp = a.sparkline.reduce((s, v) => s + v, 0) - b.sparkline.reduce((s, v) => s + v, 0);
+      } else if (sortKey === "ovhd" || sortKey === "bneck" || sortKey === "fimp") {
+        const aS = scores.get(a.task_name)?.[sortKey] ?? 0;
+        const bS = scores.get(b.task_name)?.[sortKey] ?? 0;
+        cmp = aS - bS;
+      } else {
+        cmp = ((a[sortKey] as number) ?? 0) - ((b[sortKey] as number) ?? 0);
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [filtered, isBookmarked, sortKey, sortDir, scores]);
+
+  const toggleSort = useCallback((key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "task_name" ? "asc" : "desc");
+    }
+  }, [sortKey]);
+
+  const queues = meta?.queues || [];
+  const workerGroups = meta?.worker_groups || [];
+  const filterActive = queueFilter !== "__all" || workerFilter !== "__all";
 
   return (
     <>
-      <div className="page-header">
-        <h1>Tasks</h1>
-        <span className="badge">{tasks.length} tracked</span>
-      </div>
+      <aside className="sidebar">
+        <div className="sidebar-scroll">
+          <div className="section-label">
+            Queue
+            <span className="section-label-right">{queues.length}</span>
+          </div>
+          <FacetRow
+            label="All"
+            count={tasks.length}
+            active={queueFilter === "__all"}
+            onClick={() => setQueueFilter("__all")}
+          />
+          {queues.map((q) => {
+            const count = tasks.filter((t) => t.top_queues.some((tq) => tq.queue === q)).length;
+            return (
+              <FacetRow
+                key={q}
+                label={q}
+                count={count}
+                active={queueFilter === q}
+                onClick={() => setQueueFilter(q)}
+                sparkline={queueSparklines[q]}
+                waitMs={meta?.pickup_latency_p95?.[q]}
+                workerCount={meta?.workers_per_queue?.[q]}
+              />
+            );
+          })}
 
-      {(meta?.queues?.length || meta?.worker_groups?.length) ? (
-        <div className="filter-bar">
-          {meta?.queues && meta.queues.length > 0 && (
-            <div className="filter-group">
-              <span className="filter-label">Queue</span>
-              <FilterPill label="All" active={queueFilter === ""} onClick={() => setQueueFilter("")} />
-              {meta.queues.map((q) => (
-                <FilterPill
-                  key={q}
-                  label={q}
-                  active={queueFilter === q}
-                  onClick={() => setQueueFilter(q)}
-                  sparkline={queueSparklines[q]}
-                  waitMs={meta.pickup_latency_p95?.[q]}
-                  workerCount={meta.workers_per_queue?.[q]}
+          <div className="section-label">
+            Worker
+            <span className="section-label-right">{workerGroups.length}</span>
+          </div>
+          <FacetRow
+            label="All"
+            count={workerGroups.length}
+            active={workerFilter === "__all"}
+            onClick={() => setWorkerFilter("__all")}
+          />
+          {workerGroups.map((g) => (
+            <FacetRow
+              key={g}
+              label={g}
+              count={meta?.workers_per_group?.[g] ?? 0}
+              active={workerFilter === g}
+              onClick={() => setWorkerFilter(g)}
+            />
+          ))}
+        </div>
+      </aside>
+
+      <div className="main-content">
+        <div className="tasks-header">
+          <h1>Tasks</h1>
+          <span className="tracked">
+            {filtered.length === tasks.length
+              ? `${tasks.length} tracked`
+              : `${filtered.length} of ${tasks.length}`}
+          </span>
+          {filterActive && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 4 }}>
+              {queueFilter !== "__all" && (
+                <span className="filter-chip">
+                  queue = {queueFilter}
+                  <button onClick={() => setQueueFilter("__all")}>×</button>
+                </span>
+              )}
+              {workerFilter !== "__all" && (
+                <span className="filter-chip">
+                  worker = {workerFilter}
+                  <button onClick={() => setWorkerFilter("__all")}>×</button>
+                </span>
+              )}
+            </div>
+          )}
+          <div style={{ flex: 1 }} />
+        </div>
+
+        <div className="main-scroll">
+          {sorted.length > 0 ? (
+            <div className="task-table">
+              <div className="task-table-header">
+                <div className="col col-bm" />
+                <SortHeader className="col col-name" sortKey="task_name" current={sortKey} dir={sortDir} onClick={toggleSort}>Task</SortHeader>
+                <SortHeader className="col col-spark" sortKey="sparkline_sum" current={sortKey} dir={sortDir} onClick={toggleSort}>1h</SortHeader>
+                <SortHeader className="col col-rate" sortKey="rate_per_min" current={sortKey} dir={sortDir} onClick={toggleSort}>Rate</SortHeader>
+                <SortHeader className="col col-active" sortKey="active_count" current={sortKey} dir={sortDir} onClick={toggleSort}>Active</SortHeader>
+                <SortHeader className="col col-fail" sortKey="failure_rate" current={sortKey} dir={sortDir} onClick={toggleSort}>Fail / Retry</SortHeader>
+                <SortHeader className="col col-p50" sortKey="p50_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p50</SortHeader>
+                <SortHeader className="col col-p95" sortKey="p95_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p95</SortHeader>
+                <SortHeader className="col col-p99" sortKey="p99_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p99</SortHeader>
+                <SortHeader className="col col-score" sortKey="ovhd" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + low p50 — async overhead signal">Ovhd</SortHeader>
+                <SortHeader className="col col-score" sortKey="bneck" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + high p50 — bottleneck">Bneck</SortHeader>
+                <SortHeader className="col col-score" sortKey="fimp" current={sortKey} dir={sortDir} onClick={toggleSort} title="High failure rate + high volume — failure impact">FImp</SortHeader>
+              </div>
+              {sorted.map((t) => (
+                <TaskRow
+                  key={t.task_name}
+                  task={t}
+                  scores={scores.get(t.task_name)}
+                  onClick={() => navigate(`/tasks/${encodeURIComponent(t.task_name)}`)}
                 />
               ))}
             </div>
-          )}
-          {meta?.worker_groups && meta.worker_groups.length > 0 && (
-            <div className="filter-group">
-              <span className="filter-label">Worker</span>
-              <FilterPill label="All" active={groupFilter === ""} onClick={() => setGroupFilter("")} />
-              {meta.worker_groups.map((g) => (
-                <FilterPill key={g} label={g} active={groupFilter === g} onClick={() => setGroupFilter(g)} workerCount={meta.workers_per_group?.[g]} />
-              ))}
+          ) : (
+            <div className="empty-state">
+              <p>No tasks match the current filter.</p>
+              <p style={{ marginTop: 8 }}>
+                Make sure workers run with <code>-E</code> (events enabled) and the broker URL is correct.
+              </p>
             </div>
           )}
         </div>
-      ) : null}
-
-      {filtered.length > 0 ? (
-        <DataTable
-          data={filtered}
-          columns={columns}
-          getRowClassName={getRowClassName}
-          initialSorting={[{ id: "bookmark", desc: true }, { id: "task_name", desc: false }]}
-        />
-      ) : (
-        <div className="empty-state">
-          <p>No tasks observed yet.</p>
-          <p className="hint">
-            Make sure workers run with <code>-E</code> (events enabled) and
-            the broker URL is correct.
-          </p>
-        </div>
-      )}
+      </div>
     </>
   );
 }
 
-function FilterPill({
+function SortHeader({
+  className,
+  sortKey,
+  current,
+  dir,
+  onClick,
+  children,
+  title,
+}: {
+  className: string;
+  sortKey: SortKey;
+  current: SortKey;
+  dir: SortDir;
+  onClick: (key: SortKey) => void;
+  children: React.ReactNode;
+  title?: string;
+}) {
+  const indicator = current === sortKey ? (dir === "asc" ? " ↑" : " ↓") : "";
+  return (
+    <div
+      className={className}
+      style={{ cursor: "pointer" }}
+      title={title}
+      onClick={() => onClick(sortKey)}
+    >
+      {children}{indicator}
+    </div>
+  );
+}
+
+function ScoreCell({ value }: { value: number }) {
+  if (value === 0) return <span className="score-cell score-zero">—</span>;
+  const cls = value >= 70 ? "score-high" : value >= 30 ? "score-mid" : "score-low";
+  return <span className={`score-cell ${cls}`}>{value}</span>;
+}
+
+function TaskRow({
+  task: t,
+  scores,
+  onClick,
+}: {
+  task: TaskSummary;
+  scores?: { ovhd: number; bneck: number; fimp: number };
+  onClick: () => void;
+}) {
+  const failColor =
+    t.failure_rate >= 0.01 ? "txt-bad" :
+    t.failure_rate >= 0.003 ? "txt-warn" :
+    "txt-muted";
+
+  return (
+    <div className="task-row" onClick={onClick}>
+      <div className="col col-bm">
+        <BookmarkButton taskName={t.task_name} />
+      </div>
+      <div className="col col-name">
+        <StatusDot failRate={t.failure_rate} retryCount={t.retry_count} />
+        <span className="task-name" title={t.task_name}>{shortTaskName(t.task_name)}</span>
+      </div>
+      <div className="col col-spark">
+        <Sparkline values={t.sparkline} />
+      </div>
+      <div className="col col-rate">{fmtPerMin(t.rate_per_min)}</div>
+      <div className="col col-active" style={{ color: t.active_count > 0 ? undefined : "var(--fg-dim)" }}>
+        {t.active_count}
+      </div>
+      <div className={`col col-fail ${failColor}`}>
+        {fmtRate(t.failure_rate)}
+        {t.retry_count > 0 && <span className="txt-warn"> / {t.retry_count}</span>}
+      </div>
+      <div className="col col-p50">{fmtMs(t.p50_ms)}</div>
+      <div className="col col-p95">{fmtMs(t.p95_ms)}</div>
+      <div className="col col-p99">{fmtMs(t.p99_ms)}</div>
+      <div className="col col-score"><ScoreCell value={scores?.ovhd ?? 0} /></div>
+      <div className="col col-score"><ScoreCell value={scores?.bneck ?? 0} /></div>
+      <div className="col col-score"><ScoreCell value={scores?.fimp ?? 0} /></div>
+    </div>
+  );
+}
+
+function FacetRow({
   label,
+  count,
   active,
   onClick,
   sparkline,
@@ -246,45 +304,34 @@ function FilterPill({
   workerCount,
 }: {
   label: string;
+  count: number;
   active: boolean;
   onClick: () => void;
   sparkline?: number[];
   waitMs?: number | null;
   workerCount?: number;
 }) {
-  const waitClass =
-    waitMs != null && waitMs > 5000
-      ? "pill-wait-red"
-      : waitMs != null && waitMs > 1000
-        ? "pill-wait-yellow"
-        : "";
+  const waitColor = waitMs != null && waitMs > 5000 ? "var(--bad)" : waitMs != null && waitMs > 1000 ? "var(--warn)" : "var(--fg-dim)";
 
   return (
-    <button
-      className={`filter-pill${active ? " active" : ""}${sparkline ? " with-spark" : ""} ${waitClass}`}
-      onClick={onClick}
-    >
-      {sparkline && (
-        <Sparkline values={sparkline} width={40} height={14} />
-      )}
-      <span>{label}</span>
+    <div className={`facet-row${active ? " active" : ""}`} onClick={onClick}>
+      <span className="facet-label">{label}</span>
       {workerCount != null && workerCount > 0 && (
-        <span className="pill-worker-count" title={`${workerCount} worker${workerCount !== 1 ? "s" : ""}`}>{workerCount}</span>
+        <span className="facet-workers" title={`${workerCount} worker${workerCount !== 1 ? "s" : ""}`}>{workerCount}w</span>
       )}
       {waitMs != null && (
-        <span className="pill-wait">{fmtMs(waitMs)}</span>
+        <span className="facet-meta" style={{ color: waitColor }}>{fmtMs(waitMs)}</span>
       )}
-    </button>
-  );
-}
-
-function ScoreCell({ value }: { value: number }) {
-  if (value === 0) return <span className="score-cell score-zero">—</span>;
-  const cls = value >= 70 ? "score-high" : value >= 30 ? "score-mid" : "score-low";
-  return (
-    <span className={`score-cell ${cls}`} title={String(value)}>
-      {value}
-    </span>
+      {sparkline && sparkline.length > 0 && (
+        <Sparkline
+          values={sparkline}
+          width={36}
+          height={12}
+          color={active ? "var(--accent)" : "var(--fg-dim)"}
+        />
+      )}
+      <span className="facet-count">{count}</span>
+    </div>
   );
 }
 
@@ -294,9 +341,7 @@ function computeQueueSparklines(
 ): Record<string, number[]> {
   const result: Record<string, number[]> = {};
   for (const q of queues) {
-    const matching = tasks.filter((t) =>
-      t.top_queues.some((tq) => tq.queue === q)
-    );
+    const matching = tasks.filter((t) => t.top_queues.some((tq) => tq.queue === q));
     if (matching.length === 0) continue;
     const len = matching[0]?.sparkline.length || 60;
     const agg = new Array(len).fill(0);

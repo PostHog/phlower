@@ -5,12 +5,6 @@ import { invocationDetailOptions } from "../api/generated/@tanstack/react-query.
 import { Badge } from "../components/Badge";
 import { fmtMs, fmtTsFull } from "../util";
 
-/** A record is "partial" if it has a terminal state but no detail fields — thinned by SQLite. */
-function isPartial(inv: InvocationRecord): boolean {
-  const terminal = ["SUCCESS", "FAILURE", "RETRY"].includes(inv.state);
-  return terminal && !inv.args_preview && !inv.kwargs_preview && !inv.traceback_snippet && inv.transitions.length === 0;
-}
-
 export function InvocationDetail() {
   const { taskId } = useParams<{ taskId: string }>();
   const id = taskId!;
@@ -21,105 +15,181 @@ export function InvocationDetail() {
 
   if (!inv) {
     return (
-      <>
-        <div className="page-header">
-          <Link to="/" className="back">&larr; Tasks</Link>
-          <h1>Invocation not found</h1>
+      <div className="main-content">
+        <div className="main-scroll">
+          <div className="inv-header">
+            <Link to="/" className="back-btn" style={{ textDecoration: "none" }}>← Tasks</Link>
+            <h1>Invocation not found</h1>
+          </div>
+          <div className="empty-state">
+            No record for task id <code>{id}</code>. It may have been evicted or never observed.
+          </div>
         </div>
-        <p>
-          No record for task id <code>{id}</code>. It may have been evicted or
-          never observed.
-        </p>
-      </>
+      </div>
     );
   }
 
-  // Build a map of transition states for badge display
-  const transitionMap = new Map(inv.transitions.map((t) => [t.state, t.ts]));
+  const runtimeMs = inv.runtime_ms ?? 0;
+  const terminal = ["SUCCESS", "FAILURE", "RETRY"].includes(inv.state);
+  const partial = terminal && !inv.args_preview && !inv.kwargs_preview && !inv.traceback_snippet && inv.transitions.length === 0;
 
   return (
-    <>
-      <div className="page-header">
-        <Link
-          to={`/tasks/${encodeURIComponent(inv.task_name)}`}
-          className="back"
-        >
-          &larr; {inv.task_name}
-        </Link>
-        <h1 className="mono">{inv.task_id}</h1>
-        <Badge state={inv.state} />
-        {isPartial(inv) && <span className="badge partial-badge">partial</span>}
-      </div>
-
-      <div className="detail-grid">
-        {/* Lifecycle — merged with state transitions */}
-        <div className="detail-card">
-          <h3>Lifecycle</h3>
-          <table className="kv">
-            <tbody>
-              <LifecycleRow label="Received" ts={inv.received_at} state={transitionMap.has("RECEIVED") ? "RECEIVED" : undefined} />
-              <LifecycleRow label="Started" ts={inv.started_at} state={transitionMap.has("STARTED") ? "STARTED" : undefined} />
-              <LifecycleRow label="Finished" ts={inv.finished_at} state={inv.state !== "RECEIVED" && inv.state !== "STARTED" ? inv.state : undefined} />
-              <tr><td>Runtime</td><td>{fmtMs(inv.runtime_ms)}</td></tr>
-              <tr><td>Worker group</td><td className="mono">{inv.worker_group || "\u2014"}</td></tr>
-              <tr><td>Instance</td><td className="mono">{inv.worker || "\u2014"}</td></tr>
-              <tr><td>Queue</td><td className="mono">{inv.queue || "\u2014"}</td></tr>
-              {inv.retries > 0 && <tr><td>Retries</td><td>{inv.retries}</td></tr>}
-            </tbody>
-          </table>
+    <div className="main-content">
+      <div className="main-scroll">
+        {/* Header */}
+        <div className="inv-header">
+          <Link
+            to={`/tasks/${encodeURIComponent(inv.task_name)}`}
+            className="back-btn"
+            style={{ textDecoration: "none" }}
+          >
+            ← {inv.task_name.length > 42 ? inv.task_name.slice(0, 40) + "…" : inv.task_name}
+          </Link>
+          <span className="slash">/</span>
+          <h1>{inv.task_id}</h1>
+          <Badge state={inv.state} />
+          {partial && <span style={{ fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, color: "var(--warn)", letterSpacing: "0.04em" }}>PARTIAL</span>}
+          <div style={{ flex: 1 }} />
+          <span className="inv-header-meta">
+            worker={inv.worker?.split("@")[1]?.split("-").slice(-1)[0] ?? inv.worker ?? "—"}
+            {" · runtime="}{fmtMs(runtimeMs)}
+          </span>
         </div>
 
-        {/* Arguments */}
-        {(inv.args_preview || inv.kwargs_preview) && (
-          <div className="detail-card">
-            <h3>Arguments</h3>
+        {/* Parent strip */}
+        {/* Retry strip */}
+        {inv.retries > 0 && (
+          <div className="strip">
+            <span className="strip-label">Retries</span>
+            <span style={{ color: "var(--fg)" }}>{inv.retries} attempt(s)</span>
+          </div>
+        )}
+
+        {/* Lifecycle */}
+        <div className="rail">
+          <span className="rail-label">Lifecycle</span>
+          <span className="rail-right">
+            received → {inv.state === "SUCCESS" ? "finished" : inv.state === "FAILURE" ? "failed" : "pending"}
+            {" · "}{fmtMs(runtimeMs)}
+          </span>
+        </div>
+        <div className="lifecycle-band">
+          <LifecycleTimeline inv={inv} runtimeMs={runtimeMs} />
+        </div>
+
+        {/* Two-column body: metadata | code */}
+        <div className="inv-body">
+          <div className="inv-metadata">
+            <div style={{ padding: "18px 20px 6px", fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-muted)" }}>
+              Metadata
+            </div>
+            <KvRow k="Task" v={inv.task_name} />
+            <KvRow k="Queue" v={inv.queue ?? "—"} />
+            <KvRow k="Worker group" v={inv.worker_group ?? "—"} />
+            <KvRow k="Instance" v={inv.worker ?? "—"} />
+            <KvRow k="Runtime" v={fmtMs(runtimeMs)} />
+            <KvRow k="Received" v={fmtTsFull(inv.received_at)} />
+            <KvRow k="Started" v={fmtTsFull(inv.started_at)} />
+            <KvRow k="Finished" v={fmtTsFull(inv.finished_at)} color={inv.state === "FAILURE" ? "var(--bad)" : undefined} />
+
+            {/* Transitions */}
+            {inv.transitions.length > 0 && (
+              <>
+                <div style={{ padding: "14px 20px 6px", fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--fg-muted)" }}>
+                  Transitions
+                </div>
+                {inv.transitions.map((t, i) => (
+                  <KvRow key={i} k={t.state} v={fmtTsFull(t.ts)} />
+                ))}
+              </>
+            )}
+          </div>
+
+          <div className="inv-code">
             {inv.args_preview && (
-              <div className="code-block">
-                <label>args</label>
-                <pre>{inv.args_preview}</pre>
+              <div className="code-block-section">
+                <div className="code-block-label">Args</div>
+                <pre className="code-block-body">{inv.args_preview}</pre>
               </div>
             )}
             {inv.kwargs_preview && (
-              <div className="code-block">
-                <label>kwargs</label>
-                <pre>{inv.kwargs_preview}</pre>
+              <div className="code-block-section">
+                <div className="code-block-label">Kwargs</div>
+                <pre className="code-block-body">{inv.kwargs_preview}</pre>
+              </div>
+            )}
+            {inv.state === "FAILURE" && inv.exception_type && (
+              <>
+                <div className="code-block-section">
+                  <div className="code-block-label" style={{ color: "var(--bad)" }}>Error</div>
+                  <pre className="code-block-body" style={{ color: "var(--bad)" }}>
+                    {inv.exception_type}: {inv.exception_message}
+                  </pre>
+                </div>
+                {inv.traceback_snippet && (
+                  <div className="code-block-section">
+                    <div className="code-block-label">Traceback</div>
+                    <pre className="code-block-body">{inv.traceback_snippet}</pre>
+                  </div>
+                )}
+              </>
+            )}
+            {!inv.args_preview && !inv.kwargs_preview && !inv.exception_type && (
+              <div className="empty-state">
+                <p>No args/kwargs/error data available.</p>
+                {partial && (
+                  <p style={{ marginTop: 4, fontSize: 11 }}>
+                    Partial record — args, kwargs, and traceback were removed after ≈8h to save storage.
+                    Metadata (timestamps, state, worker, queue) is retained for up to 7 days.
+                  </p>
+                )}
               </div>
             )}
           </div>
-        )}
-
-        {/* Error */}
-        {inv.exception_type && (
-          <div className="detail-card wide">
-            <h3>Error</h3>
-            <div className="code-block err">
-              <label>{inv.exception_type}</label>
-              {inv.exception_message && <pre>{inv.exception_message}</pre>}
-              {inv.traceback_snippet && (
-                <pre className="traceback">{inv.traceback_snippet}</pre>
-              )}
-            </div>
-          </div>
-        )}
-
-        {isPartial(inv) && (
-          <div className="detail-card wide partial-note">
-            <p>This is a partial record. Args, kwargs, and traceback were removed after {"\u2248"}8 hours to save storage. Metadata (timestamps, state, worker, queue) is retained for up to 7 days.</p>
-          </div>
-        )}
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
-function LifecycleRow({ label, ts, state }: { label: string; ts: number | null; state?: string }) {
+function LifecycleTimeline({ inv, runtimeMs }: { inv: InvocationRecord; runtimeMs: number }) {
+  const w = 900;
+  const pad = 12;
+  const innerW = w - pad * 2;
+  const barY = 22;
+  const barH = 8;
+  const color =
+    inv.state === "SUCCESS" ? "var(--success)" :
+    inv.state === "FAILURE" ? "var(--bad)" :
+    "var(--warn)";
+
   return (
-    <tr>
-      <td>{label}</td>
-      <td>
-        {state && <Badge state={state} small />}{" "}
-        {fmtTsFull(ts)}
-      </td>
-    </tr>
+    <svg width="100%" viewBox={`0 0 ${w} 62`} style={{ display: "block" }}>
+      <line x1={pad} y1={barY + barH / 2} x2={w - pad} y2={barY + barH / 2} stroke="var(--border-subtle)" strokeWidth="1" />
+      <rect x={pad} y={barY} width={innerW} height={barH} fill={color} opacity="0.35" />
+      <rect x={pad} y={barY} width={innerW} height={barH} fill={color} opacity="0.7" />
+      <line x1={pad} y1={barY - 4} x2={pad} y2={barY + barH + 4} stroke="var(--fg)" strokeWidth="1" />
+      <line x1={w - pad} y1={barY - 4} x2={w - pad} y2={barY + barH + 4} stroke="var(--fg)" strokeWidth="1" />
+      <text x={pad} y={14} fontFamily="var(--mono)" fontSize="10" fill="var(--fg-muted)">received</text>
+      <text x={pad} y={56} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)">{fmtTsFull(inv.received_at).slice(11)}</text>
+      <text x={w - pad} y={14} fontFamily="var(--mono)" fontSize="10" fill="var(--fg-muted)" textAnchor="end">
+        {inv.state === "SUCCESS" ? "finished" : inv.state === "FAILURE" ? "failed" : "pending"}
+      </text>
+      <text x={w - pad} y={56} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)" textAnchor="end">
+        {fmtTsFull(inv.finished_at).slice(11)}
+      </text>
+      <text x={w / 2} y={barY - 4} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)" textAnchor="middle" fontWeight="500">
+        {fmtMs(runtimeMs)}
+      </text>
+    </svg>
+  );
+}
+
+function KvRow({ k, v, color }: { k: string; v: string; color?: string }) {
+  return (
+    <div className="kv-row">
+      <span className="kv-key">{k}</span>
+      <span className="kv-val" style={color ? { color } : undefined}>{v}</span>
+    </div>
   );
 }

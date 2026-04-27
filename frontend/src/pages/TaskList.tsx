@@ -12,22 +12,39 @@ import { fmtMs, fmtPerMin, fmtRate, shortTaskName } from "../util";
 type SortKey = "task_name" | "sparkline_sum" | "rate_per_min" | "active_count" | "failure_rate" | "p50_ms" | "p95_ms" | "p99_ms" | "ovhd" | "bneck" | "fimp";
 type SortDir = "asc" | "desc";
 
+function logNorm(value: number, min: number, max: number): number {
+  if (value <= 0 || min <= 0 || max <= min) return 0;
+  const logVal = Math.log10(value);
+  const logMin = Math.log10(min);
+  const logMax = Math.log10(max);
+  if (logMax === logMin) return 0;
+  return Math.max(0, Math.min(1, (logVal - logMin) / (logMax - logMin)));
+}
+
+function ovhdPenalty(p50Ms: number): number {
+  return 1 / (1 + (p50Ms / 75) ** 3);
+}
+
 function computeScores(tasks: TaskSummary[]) {
-  const maxRate = Math.max(...tasks.map((t) => t.rate_per_min), 1e-9);
-  const maxP50 = Math.max(...tasks.map((t) => t.p50_ms ?? 0), 1e-9);
-  const maxFailRate = Math.max(...tasks.map((t) => t.failure_rate), 1e-9);
+  const rates = tasks.map((t) => t.rate_per_min).filter((r) => r > 0);
+  const p95s = tasks.map((t) => t.p95_ms ?? 0).filter((v) => v > 0);
+  if (rates.length === 0) return new Map();
+
+  const minRate = Math.min(...rates);
+  const maxRate = Math.max(...rates);
+  const minP95 = Math.min(...p95s);
+  const maxP95 = Math.max(...p95s);
 
   return new Map(
     tasks.map((t) => {
-      const rateNorm = t.rate_per_min / maxRate;
-      const p50Norm = (t.p50_ms ?? 0) / maxP50;
-      const failNorm = t.failure_rate / maxFailRate;
+      const rateLog = logNorm(t.rate_per_min, minRate, maxRate);
+      const p95Log = logNorm(t.p95_ms ?? 0, minP95, maxP95);
       return [
         t.task_name,
         {
-          ovhd: Math.round(rateNorm * (1 - p50Norm) * 100),
-          bneck: Math.round(rateNorm * p50Norm * 100),
-          fimp: Math.round(failNorm * rateNorm * 100),
+          ovhd: Math.round(rateLog * ovhdPenalty(t.p50_ms ?? 0) * 100),
+          bneck: Math.round(rateLog * p95Log * 100),
+          fimp: Math.round(t.failure_rate * rateLog * 100),
         },
       ] as const;
     })
@@ -187,9 +204,9 @@ export function TaskList() {
                 <SortHeader className="col col-p50" sortKey="p50_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p50</SortHeader>
                 <SortHeader className="col col-p95" sortKey="p95_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p95</SortHeader>
                 <SortHeader className="col col-p99" sortKey="p99_ms" current={sortKey} dir={sortDir} onClick={toggleSort}>p99</SortHeader>
-                <SortHeader className="col col-score" sortKey="ovhd" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + low p50 — async overhead signal">Ovhd</SortHeader>
-                <SortHeader className="col col-score" sortKey="bneck" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + high p50 — bottleneck">Bneck</SortHeader>
-                <SortHeader className="col col-score" sortKey="fimp" current={sortKey} dir={sortDir} onClick={toggleSort} title="High failure rate + high volume — failure impact">FImp</SortHeader>
+                <SortHeader className="col col-score" sortKey="ovhd" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + sub-100ms p50 — async overhead, could be a function call">Ovhd</SortHeader>
+                <SortHeader className="col col-score" sortKey="bneck" current={sortKey} dir={sortDir} onClick={toggleSort} title="High rate + high p95 — worker time bottleneck">Bneck</SortHeader>
+                <SortHeader className="col col-score" sortKey="fimp" current={sortKey} dir={sortDir} onClick={toggleSort} title="High failure rate × high volume — failure impact">FImp</SortHeader>
               </div>
               {sorted.map((t) => (
                 <TaskRow

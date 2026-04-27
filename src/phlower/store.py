@@ -415,8 +415,8 @@ class Store:
             state=TaskState.RECEIVED,
         )
         self.invocations[task_id] = rec
-        self._invocation_order.append(task_id)
         if self.sqlite_store is None:
+            self._invocation_order.append(task_id)
             while len(self.invocations) > self._NO_SQLITE_CAP:
                 old_id = self._invocation_order.popleft()
                 self.invocations.pop(old_id, None)
@@ -535,7 +535,8 @@ class Store:
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
-            self._sqlite_pending.append(self._snapshot(rec))
+            if self.sqlite_store is not None:
+                self._sqlite_pending.append(self._snapshot(rec))
 
     def process_failed(
         self,
@@ -580,10 +581,10 @@ class Store:
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
-            self._sqlite_pending.append(self._snapshot(rec))
-            # Heavy fields persisted to SQLite — free from memory
-            rec.traceback_snippet = None
-            rec.exception_message = None
+            if self.sqlite_store is not None:
+                self._sqlite_pending.append(self._snapshot(rec))
+                rec.traceback_snippet = None
+                rec.exception_message = None
 
     def process_retried(
         self,
@@ -616,10 +617,10 @@ class Store:
             self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
-            self._sqlite_pending.append(self._snapshot(rec))
-            # Heavy fields persisted to SQLite — free from memory
-            rec.traceback_snippet = None
-            rec.exception_message = None
+            if self.sqlite_store is not None:
+                self._sqlite_pending.append(self._snapshot(rec))
+                rec.traceback_snippet = None
+                rec.exception_message = None
 
     # -- periodic maintenance ---------------------------------------------
 

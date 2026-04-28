@@ -112,7 +112,8 @@ async def _sqlite_flush_loop(store: Store, sqlite_store) -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("SQLite flush error (%d records retained in memory)", len(records))
+            logger.exception("SQLite flush error — dropping %d records to prevent memory leak", len(records))
+            store.remove_flushed([r.task_id for r in records])
 
 
 async def _aggregate_snapshot_loop(

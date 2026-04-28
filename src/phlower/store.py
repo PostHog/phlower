@@ -366,7 +366,7 @@ class Store:
         return bool(self.config.task_allowlist_regex.match(task_name))
 
     @staticmethod
-    def _snapshot(rec: InvocationRecord) -> CompletedRecord:
+    def _snapshot(rec: InvocationRecord, *, include_detail: bool = True) -> CompletedRecord:
         return CompletedRecord(
             task_id=rec.task_id,
             task_name=rec.task_name,
@@ -378,9 +378,9 @@ class Store:
             worker=rec.worker,
             queue=rec.queue,
             exception_type=rec.exception_type,
-            args_preview=rec.args_preview,
-            kwargs_preview=rec.kwargs_preview,
-            traceback_snippet=rec.traceback_snippet,
+            args_preview=rec.args_preview if include_detail else None,
+            kwargs_preview=rec.kwargs_preview if include_detail else None,
+            traceback_snippet=rec.traceback_snippet if include_detail else None,
         )
 
 
@@ -536,7 +536,9 @@ class Store:
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
             if self.sqlite_store is not None:
-                self._sqlite_pending.append(self._snapshot(rec))
+                threshold = self.config.detail_rate_threshold
+                include_detail = threshold <= 0 or agg._recent_rate() <= threshold
+                self._sqlite_pending.append(self._snapshot(rec, include_detail=include_detail))
 
     def process_failed(
         self,

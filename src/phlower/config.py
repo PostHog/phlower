@@ -70,3 +70,6 @@ class Config:
     snapshot_interval_seconds: int = field(
         default_factory=lambda: int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "60"))
     )
+    detail_rate_threshold: int = field(
+        default_factory=lambda: int(os.environ.get("DETAIL_RATE_THRESHOLD", "500"))
+    )

@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS invocations (
     exception_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inv_finished ON invocations (finished_at);
-CREATE INDEX IF NOT EXISTS idx_inv_finished_task ON invocations (finished_at, task_id);
 CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished_at);
 
 CREATE TABLE IF NOT EXISTS invocation_details (

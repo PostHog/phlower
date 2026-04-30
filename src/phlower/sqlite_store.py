@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS invocations (
     exception_type TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inv_finished ON invocations (finished_at);
+CREATE INDEX IF NOT EXISTS idx_inv_finished_task ON invocations (finished_at, task_id);
 CREATE INDEX IF NOT EXISTS idx_inv_task_name ON invocations (task_name, finished_at);
 
 CREATE TABLE IF NOT EXISTS invocation_details (
@@ -174,49 +175,45 @@ class SQLiteStore:
         self._conn.commit()
         return len(records)
 
-    @_serialized
-    def purge_details(self, cutoff_ts: float) -> int:
-        """Delete detail rows for invocations finished before cutoff."""
-        total = 0
-        while True:
-            cur = self._conn.execute(
-                "DELETE FROM invocation_details WHERE task_id IN ("
-                "  SELECT d.task_id FROM invocation_details d"
-                "  JOIN invocations i ON d.task_id = i.task_id"
-                "  WHERE i.finished_at < ? LIMIT 50000"
-                ")",
-                (cutoff_ts,),
-            )
-            self._conn.commit()
-            affected = cur.rowcount
-            total += affected
-            if affected < 50000:
-                break
-        return total
+    PURGE_BATCH_SIZE = 50000
 
     @_serialized
-    def purge_expired(self, cutoff_ts: float) -> int:
-        """Delete old core rows + their details in batches."""
-        total = 0
-        while True:
-            self._conn.execute(
-                "DELETE FROM invocation_details WHERE task_id IN ("
-                "  SELECT task_id FROM invocations WHERE finished_at < ? LIMIT 50000"
-                ")",
-                (cutoff_ts,),
-            )
-            cur = self._conn.execute(
-                "DELETE FROM invocations WHERE rowid IN ("
-                "  SELECT rowid FROM invocations WHERE finished_at < ? LIMIT 50000"
-                ")",
-                (cutoff_ts,),
-            )
-            self._conn.commit()
-            affected = cur.rowcount
-            total += affected
-            if affected < 50000:
-                break
-        return total
+    def purge_details_batch(self, cutoff_ts: float) -> int:
+        """Delete one batch of detail rows. Returns rows deleted in this batch."""
+        cur = self._conn.execute(
+            "DELETE FROM invocation_details WHERE task_id IN ("
+            "  SELECT i.task_id FROM invocations i"
+            "  JOIN invocation_details d ON d.task_id = i.task_id"
+            "  WHERE i.finished_at < ? LIMIT ?"
+            ")",
+            (cutoff_ts, self.PURGE_BATCH_SIZE),
+        )
+        self._conn.commit()
+        affected = cur.rowcount
+        self._cached_detail_row_count = max(0, self._cached_detail_row_count - affected)
+        return affected
+
+    @_serialized
+    def purge_expired_batch(self, cutoff_ts: float) -> int:
+        """Delete one batch of expired invocations + their details.
+        Returns invocation rows deleted in this batch.
+        """
+        self._conn.execute(
+            "DELETE FROM invocation_details WHERE task_id IN ("
+            "  SELECT task_id FROM invocations WHERE finished_at < ? LIMIT ?"
+            ")",
+            (cutoff_ts, self.PURGE_BATCH_SIZE),
+        )
+        cur = self._conn.execute(
+            "DELETE FROM invocations WHERE rowid IN ("
+            "  SELECT rowid FROM invocations WHERE finished_at < ? LIMIT ?"
+            ")",
+            (cutoff_ts, self.PURGE_BATCH_SIZE),
+        )
+        self._conn.commit()
+        affected = cur.rowcount
+        self._cached_row_count = max(0, self._cached_row_count - affected)
+        return affected
 
     # -- reads ------------------------------------------------------------
 

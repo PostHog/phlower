@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import Config
 from .events import CeleryEventConsumer
+from .sqlite_store import SQLiteStore
 from .sse import SSEBroadcaster
 from .store import Store
 
@@ -164,6 +165,23 @@ async def _background_recovery(store: Store, sqlite_store, config: Config) -> No
         logger.exception("Background recovery failed")
 
 
+async def _purge_in_batches(loop, batch_fn, cutoff_ts: float) -> int:
+    """Repeat a batch purge until empty, yielding between batches.
+
+    Each batch acquires the SQLite lock independently, so concurrent flushes
+    can interleave. Without this, a multi-million-row purge holds the lock
+    for tens of minutes and starves the flush loop until liveness probes fail.
+    """
+    total = 0
+    while True:
+        deleted = await loop.run_in_executor(None, batch_fn, cutoff_ts)
+        total += deleted
+        if deleted < SQLiteStore.PURGE_BATCH_SIZE:
+            break
+        await asyncio.sleep(0.05)
+    return total
+
+
 async def _sqlite_purge_loop(
     store: Store, sqlite_store, config: Config, consumer=None
 ) -> None:
@@ -187,19 +205,19 @@ async def _sqlite_purge_loop(
                     disk_pct, config.sqlite_disk_usage_pct_cap, retention_hours, detail_hours,
                 )
                 purge_cutoff = now - retention_hours * 3600
-                await loop.run_in_executor(None, sqlite_store.purge_expired, purge_cutoff)
+                await _purge_in_batches(loop, sqlite_store.purge_expired_batch, purge_cutoff)
                 detail_cutoff = now - detail_hours * 3600
-                await loop.run_in_executor(None, sqlite_store.purge_details, detail_cutoff)
+                await _purge_in_batches(loop, sqlite_store.purge_details_batch, detail_cutoff)
                 disk_pct = await loop.run_in_executor(None, sqlite_store.disk_usage_pct)
         else:
             # Normal purge: details first (short retention), then core rows
             detail_cutoff = now - detail_hours * 3600
-            purged_details = await loop.run_in_executor(None, sqlite_store.purge_details, detail_cutoff)
+            purged_details = await _purge_in_batches(loop, sqlite_store.purge_details_batch, detail_cutoff)
             if purged_details:
                 logger.info("SQLite purge: deleted %d detail rows (>%dh)", purged_details, detail_hours)
 
             purge_cutoff = now - retention_hours * 3600
-            deleted = await loop.run_in_executor(None, sqlite_store.purge_expired, purge_cutoff)
+            deleted = await _purge_in_batches(loop, sqlite_store.purge_expired_batch, purge_cutoff)
             if deleted:
                 logger.info("SQLite purge: deleted %d expired rows (>%dh)", deleted, retention_hours)
 

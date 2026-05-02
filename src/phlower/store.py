@@ -349,8 +349,18 @@ class Store:
         # rolling event counter for tasks/sec display
         self._event_timestamps: deque[float] = deque(maxlen=2000)
 
-        # SQLite write-behind buffer (CompletedRecords, snapshotted at completion)
+        # SQLite write-behind buffer (CompletedRecords, snapshotted at completion).
+        # Capped — if the flush loop falls behind (slow purge, big checkpoint,
+        # bursty ingest), we drop oldest. RAM staying bounded matters more than
+        # capturing every record during overload; the alternative is RSS
+        # runaway → liveness probe → SIGKILL, and ALL pending records lost.
         self._sqlite_pending: list[CompletedRecord] = []
+        self._sqlite_pending_cap: int = config.sqlite_pending_buffer_cap
+        self._dropped_invocations_total: int = 0
+        # Cap _new_invocation_ids at the same proportion — it's drained on a
+        # 600ms SSE cadence, far faster than SQLite flush, but still worth
+        # bounding so a stalled SSE loop can't grow it without bound.
+        self._new_invocation_ids_cap: int = max(10_000, config.sqlite_pending_buffer_cap // 4)
 
         # pickup latency (received→started) per queue, rolling buffer
         self._pickup_latencies: dict[str, deque[float]] = defaultdict(
@@ -383,6 +393,33 @@ class Store:
             traceback_snippet=rec.traceback_snippet if include_detail else None,
         )
 
+
+    def _append_pending(self, snapshot: CompletedRecord, task_id: str) -> None:
+        """Append to write-behind buffer, dropping oldest if over cap.
+
+        Dropping happens in chunks (10% of cap) to amortize the list-slice
+        cost — single-element drops on a long list copy the whole tail on
+        every append.
+        """
+        self._sqlite_pending.append(snapshot)
+        if len(self._sqlite_pending) > self._sqlite_pending_cap:
+            drop_n = max(1, self._sqlite_pending_cap // 10)
+            self._sqlite_pending = self._sqlite_pending[drop_n:]
+            self._dropped_invocations_total += drop_n
+            if self._dropped_invocations_total % (self._sqlite_pending_cap // 10) == 0:
+                logger.warning(
+                    "SQLite write-behind buffer over cap — dropped %d records "
+                    "(total dropped: %d). Flush loop is falling behind.",
+                    drop_n, self._dropped_invocations_total,
+                )
+        self._new_invocation_ids.append(task_id)
+        if len(self._new_invocation_ids) > self._new_invocation_ids_cap:
+            drop_n = max(1, self._new_invocation_ids_cap // 10)
+            self._new_invocation_ids = self._new_invocation_ids[drop_n:]
+
+    def snapshot_dropped_invocations(self) -> int:
+        """Counter of write-behind records dropped since startup."""
+        return self._dropped_invocations_total
 
     def _get_or_create_task(self, task_name: str) -> TaskAggregate:
         agg = self.tasks.get(task_name)
@@ -532,13 +569,16 @@ class Store:
             rec.runtime_ms = runtime_ms
             rec.updated_at = ts
             rec.transitions.append((TaskState.SUCCESS, ts))
-            self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
             if self.sqlite_store is not None:
                 threshold = self.config.detail_rate_threshold
                 include_detail = threshold <= 0 or agg._recent_rate() <= threshold
-                self._sqlite_pending.append(self._snapshot(rec, include_detail=include_detail))
+                self._append_pending(
+                    self._snapshot(rec, include_detail=include_detail), task_id,
+                )
+            else:
+                self._new_invocation_ids.append(task_id)
 
     def process_failed(
         self,
@@ -580,13 +620,14 @@ class Store:
             rec.traceback_snippet = traceback_snippet
             rec.updated_at = ts
             rec.transitions.append((TaskState.FAILURE, ts))
-            self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
             if self.sqlite_store is not None:
-                self._sqlite_pending.append(self._snapshot(rec))
+                self._append_pending(self._snapshot(rec), task_id)
                 rec.traceback_snippet = None
                 rec.exception_message = None
+            else:
+                self._new_invocation_ids.append(task_id)
 
     def process_retried(
         self,
@@ -616,13 +657,14 @@ class Store:
             rec.traceback_snippet = traceback_snippet
             rec.updated_at = ts
             rec.transitions.append((TaskState.RETRY, ts))
-            self._new_invocation_ids.append(task_id)
             self._dirty_tasks.add(name)
             self._snapshot_dirty.add(name)
             if self.sqlite_store is not None:
-                self._sqlite_pending.append(self._snapshot(rec))
+                self._append_pending(self._snapshot(rec), task_id)
                 rec.traceback_snippet = None
                 rec.exception_message = None
+            else:
+                self._new_invocation_ids.append(task_id)
 
     # -- periodic maintenance ---------------------------------------------
 

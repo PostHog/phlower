@@ -406,7 +406,7 @@ class Store:
             drop_n = max(1, self._sqlite_pending_cap // 10)
             self._sqlite_pending = self._sqlite_pending[drop_n:]
             self._dropped_invocations_total += drop_n
-            if self._dropped_invocations_total % (self._sqlite_pending_cap // 10) == 0:
+            if self._dropped_invocations_total % drop_n == 0:
                 logger.warning(
                     "SQLite write-behind buffer over cap — dropped %d records "
                     "(total dropped: %d). Flush loop is falling behind.",

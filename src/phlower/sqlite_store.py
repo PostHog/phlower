@@ -158,15 +158,16 @@ class SQLiteStore:
         tables. The legacy tables get unioned into reads until their data
         ages past retention, then dropped.
         """
-        had_old_inv = self._table_exists("invocations")
-        had_old_details = self._table_exists("invocation_details")
-        if not had_old_inv and not had_old_details:
+        if not self._table_exists("invocations") and not self._table_exists(
+            "invocation_details"
+        ):
             return
 
         # Run the existing column-split migration (args/kwargs out of
         # invocations) before renaming, so legacy data lands in the
-        # canonical layout.
-        if had_old_inv:
+        # canonical layout — _split_legacy_columns() creates the
+        # invocation_details table itself, so re-check existence after.
+        if self._table_exists("invocations"):
             cols = {
                 row[1]
                 for row in self._conn.execute("PRAGMA table_info(invocations)").fetchall()
@@ -174,10 +175,12 @@ class SQLiteStore:
             if "args_preview" in cols:
                 self._split_legacy_columns()
 
-        if had_old_inv and not self._table_exists(LEGACY_INV):
+        if self._table_exists("invocations") and not self._table_exists(LEGACY_INV):
             logger.info("Migrating: ALTER TABLE invocations RENAME TO %s", LEGACY_INV)
             self._conn.execute(f"ALTER TABLE invocations RENAME TO {LEGACY_INV}")
-        if had_old_details and not self._table_exists(LEGACY_DETAILS):
+        if self._table_exists("invocation_details") and not self._table_exists(
+            LEGACY_DETAILS
+        ):
             logger.info(
                 "Migrating: ALTER TABLE invocation_details RENAME TO %s", LEGACY_DETAILS
             )
@@ -268,7 +271,15 @@ class SQLiteStore:
     # -- writes -----------------------------------------------------------
 
     def flush_batch(self, records: list) -> int:
-        """Persist completed records, grouping by their UTC date."""
+        """Persist completed records, grouping by their UTC date.
+
+        Note: ``INSERT OR REPLACE`` only deduplicates within one partition,
+        so a task whose lifecycle straddles midnight UTC (e.g. RETRY at
+        23:59, SUCCESS at 00:01) can have two rows in two partitions. Read
+        paths dedupe by task_id at query time. Aggregate recovery may
+        slightly inflate counts for these tasks — bounded by the fraction
+        of tasks crossing midnight, typically <1%.
+        """
         if not records:
             return 0
         # Group by partition suffix (UTC date of finished_at, falling back
@@ -459,11 +470,20 @@ class SQLiteStore:
             f"SELECT * FROM ({union_sql}) "
             "ORDER BY finished_at DESC LIMIT ?"
         )
-        union_params.append(fetch_limit)
+        # Over-fetch to leave room for dedup. Cross-partition duplicates
+        # are bounded by the fraction of tasks whose lifecycle straddles
+        # midnight UTC — rare in practice — but a fetch_limit of just
+        # ``limit`` could underfill the result if duplicates show up.
+        union_params.append(fetch_limit * 2)
         rows = self._conn.execute(sql, union_params).fetchall()
+        seen_ids: set[str] = set()
         results: list[InvocationRecord] = []
         for row in rows:
-            if exclude_ids and row[0] in exclude_ids:
+            tid = row[0]
+            if tid in seen_ids:
+                continue  # cross-partition dedup — rows arrive newest-first
+            seen_ids.add(tid)
+            if exclude_ids and tid in exclude_ids:
                 continue
             results.append(self._row_to_record(row))
             if len(results) >= limit:
@@ -520,11 +540,16 @@ class SQLiteStore:
             f"SELECT * FROM ({union_sql}) "
             "ORDER BY finished_at DESC LIMIT ? OFFSET ?"
         )
-        union_params.extend([fetch_limit, offset])
+        union_params.extend([fetch_limit * 2, offset])
         rows = self._conn.execute(sql, union_params).fetchall()
+        seen_ids: set[str] = set()
         results: list[InvocationRecord] = []
         for row in rows:
-            if exclude_ids and row[0] in exclude_ids:
+            tid = row[0]
+            if tid in seen_ids:
+                continue  # cross-partition dedup — rows arrive newest-first
+            seen_ids.add(tid)
+            if exclude_ids and tid in exclude_ids:
                 continue
             results.append(self._row_to_record(row))
             if len(results) >= limit:

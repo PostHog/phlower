@@ -73,3 +73,8 @@ class Config:
     detail_rate_threshold: int = field(
         default_factory=lambda: int(os.environ.get("DETAIL_RATE_THRESHOLD", "500"))
     )
+    sqlite_pending_buffer_cap: int = field(
+        default_factory=lambda: int(
+            os.environ.get("SQLITE_PENDING_BUFFER_CAP", "200000")
+        )
+    )

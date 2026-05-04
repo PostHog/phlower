@@ -123,6 +123,14 @@ class SQLiteStore:
 
     def _connect(self, path: str) -> sqlite3.Connection:
         conn = sqlite3.connect(path, check_same_thread=False)
+        # Incremental auto_vacuum: tracks freed pages in a separate list so
+        # ``PRAGMA incremental_vacuum`` can return them to the OS without a
+        # full VACUUM. SQLite requires this PRAGMA to be set BEFORE any
+        # tables are created; on existing DBs it's a no-op without a
+        # follow-up full VACUUM. We set it here so a fresh DB picks it up
+        # at first init_schema() — keeps the file size tracking live data
+        # instead of the high-water mark.
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -336,6 +344,10 @@ class SQLiteStore:
         Each DROP TABLE is a metadata operation (fast, predictable); the
         whole purge replaces the multi-minute row-by-row DELETE that
         previously starved the flush loop.
+
+        After the drops, ``incremental_vacuum`` returns the freed pages
+        to the filesystem — without it SQLite holds onto them as internal
+        free pages and the file never shrinks, eventually filling the PVC.
         """
         cutoff_ts = time.time() - retention_hours * 3600
         cutoff_suffix = _suffix_for_ts(cutoff_ts)
@@ -354,7 +366,31 @@ class SQLiteStore:
         # Legacy tables: drop wholesale once their newest row is past
         # retention. Cheap to check — single MAX() per table.
         self._maybe_drop_legacy(cutoff_ts)
+        if dropped or not self._has_legacy_inv:
+            self._reclaim_free_pages()
         return dropped
+
+    def _reclaim_free_pages(self) -> None:
+        """Return any freed pages to the OS via incremental_vacuum.
+
+        No-op unless the DB was created with ``auto_vacuum=INCREMENTAL``;
+        on those DBs it's fast (proportional to free-page count, not DB
+        size). Called after DROP TABLE so file size tracks live data.
+
+        The PRAGMA emits one result row per freed page, so the cursor
+        MUST be drained — without ``fetchall()`` only one page gets
+        reclaimed and the file barely shrinks.
+        """
+        try:
+            row = self._conn.execute("PRAGMA freelist_count").fetchone()
+            free_pages = row[0] if row else 0
+            if free_pages == 0:
+                return
+            self._conn.execute("PRAGMA incremental_vacuum").fetchall()
+            self._conn.commit()
+            logger.info("incremental_vacuum reclaimed %d pages", free_pages)
+        except Exception:
+            logger.exception("incremental_vacuum failed")
 
     def _maybe_drop_legacy(self, cutoff_ts: float) -> None:
         if self._has_legacy_inv:

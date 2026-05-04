@@ -65,7 +65,7 @@ class Config:
         default_factory=lambda: int(os.environ.get("SQLITE_INVOCATION_RETENTION_HOURS", "120"))
     )
     sqlite_disk_usage_pct_cap: int = field(
-        default_factory=lambda: int(os.environ.get("SQLITE_DISK_USAGE_PCT_CAP", "85"))
+        default_factory=lambda: int(os.environ.get("SQLITE_DISK_USAGE_PCT_CAP", "75"))
     )
     snapshot_interval_seconds: int = field(
         default_factory=lambda: int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "60"))

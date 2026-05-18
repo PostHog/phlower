@@ -14,7 +14,7 @@ from .models import HourBucket, MinuteBucket
 
 logger = logging.getLogger(__name__)
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2  # v2: hourly_workers keys are worker groups, not pod hostnames
 
 
 def _serialize_tdigest(td: TDigest | None) -> str | None:

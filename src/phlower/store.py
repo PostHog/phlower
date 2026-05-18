@@ -558,10 +558,11 @@ class Store:
             agg.active_count = max(0, agg.active_count - 1)
 
             rec = self._ensure_record(task_id, name)
-            worker = rec.worker
+            # K8s pod hashes churn — aggregate by stable group, not hostname.
+            worker_group = rec.worker_group
             queue = rec.queue
             agg.record_terminal_event(
-                TaskState.SUCCESS, ts, runtime_ms=runtime_ms, worker=worker, queue=queue
+                TaskState.SUCCESS, ts, runtime_ms=runtime_ms, worker=worker_group, queue=queue
             )
 
             rec.state = TaskState.SUCCESS
@@ -599,13 +600,13 @@ class Store:
             agg.active_count = max(0, agg.active_count - 1)
 
             rec = self._ensure_record(task_id, name)
-            worker = rec.worker
+            worker_group = rec.worker_group
             queue = rec.queue
             agg.record_terminal_event(
                 TaskState.FAILURE,
                 ts,
                 runtime_ms=runtime_ms,
-                worker=worker,
+                worker=worker_group,
                 queue=queue,
                 exception_type=exception_type,
             )

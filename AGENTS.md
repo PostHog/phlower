@@ -10,6 +10,18 @@ Show actual numeric values (0-100 scores, raw metrics), not icons or simplified 
 
 Phlower is open source. Commits, PRs, and code comments must not reference internal infrastructure — no cluster names, pod names, restart counts, specific memory numbers, or deployment details. Describe problems and solutions generically ("large databases", "high-throughput environments") not as deployment incidents.
 
+## Keeping docs current
+
+Docs are part of the change, not a follow-up. Stale docs are worse than missing docs — the next contributor (or agent) will faithfully build against the old design. In the same PR:
+
+- New or changed env vars go into the README configuration table.
+- Changes to persistence, recovery, or the event pipeline update the README architecture section.
+- Design-system changes (tokens, layout, typography) update the design brief in this file.
+
+## Tests
+
+Backend tests live in `tests/`; run them with `uv run pytest -q`. CI runs the suite on every PR. Extend the tests when changing persistence or purge behaviour — that code guards against data loss and is the hardest to verify by hand.
+
 ## Frontend design brief
 
 ### Design DNA

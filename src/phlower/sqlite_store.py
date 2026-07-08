@@ -118,6 +118,9 @@ class SQLiteStore:
         self._ensured_partitions: set[str] = set()
         self._has_legacy_inv: bool = False
         self._has_legacy_details: bool = False
+        # Warn once if the file predates the auto_vacuum pragma — see
+        # vacuum_step for why incremental_vacuum is a no-op in that case.
+        self._warned_auto_vacuum: bool = False
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = self._connect(db_path)
 
@@ -336,61 +339,126 @@ class SQLiteStore:
         return len(records)
 
     # -- purge ------------------------------------------------------------
+    #
+    # Purge is chunked into small serialized primitives so no single lock
+    # hold exceeds a couple of seconds. Dropping a whole day's partition pair
+    # plus an unbounded ``incremental_vacuum`` under one lock hold can take
+    # many minutes on a large database: the flush loop starves, its write-
+    # behind buffer overflows (dropping records), and memory balloons until
+    # the process can be killed. The orchestration in app.py calls these
+    # primitives in a paced trickle so ``flush_batch`` always gets the lock
+    # between chunks.
 
     @_serialized
-    def purge_old_partitions(self, retention_hours: int) -> int:
-        """Drop partitions older than ``retention_hours``. Returns count dropped.
+    def list_expired_partition_suffixes(self, retention_hours: int) -> list[str]:
+        """Suffixes strictly older than ``retention_hours``, oldest first.
 
-        Each DROP TABLE is a metadata operation (fast, predictable); the
-        whole purge replaces the multi-minute row-by-row DELETE that
-        previously starved the flush loop.
-
-        After the drops, ``incremental_vacuum`` returns the freed pages
-        to the filesystem — without it SQLite holds onto them as internal
-        free pages and the file never shrinks, eventually filling the PVC.
+        A partition whose suffix equals the cutoff day is kept — only
+        strictly-older suffixes are returned. Oldest-first so the trickle
+        reclaims the coldest data first.
         """
-        cutoff_ts = time.time() - retention_hours * 3600
-        cutoff_suffix = _suffix_for_ts(cutoff_ts)
-        dropped = 0
-        for suffix in self.list_partition_suffixes():
-            if suffix >= cutoff_suffix:
-                continue
-            inv_tbl = f"invocations_{suffix}"
-            det_tbl = f"invocation_details_{suffix}"
-            self._conn.execute(f"DROP TABLE IF EXISTS {inv_tbl}")
-            self._conn.execute(f"DROP TABLE IF EXISTS {det_tbl}")
-            self._ensured_partitions.discard(suffix)
-            dropped += 1
-            logger.info("Dropped expired partition %s", suffix)
+        cutoff_suffix = _suffix_for_ts(time.time() - retention_hours * 3600)
+        expired = [s for s in self.list_partition_suffixes() if s < cutoff_suffix]
+        expired.sort()
+        return expired
+
+    @_serialized
+    def purge_partition_step(self, suffix: str, max_rows: int) -> int:
+        """Delete up to ``max_rows`` rows from a partition; drop when drained.
+
+        Returns rows deleted this step; 0 means the partition is fully gone
+        so the caller stops looping. Both tables are ordinary rowid tables
+        (TEXT PRIMARY KEY does not make them WITHOUT ROWID), so the chunked
+        DELETE keys off ``rowid``.
+
+        Drain order: details rows first, then invocations rows. But the
+        empty details table is kept until the very end — every read query
+        (``lookup_task_id``, ``list_by_task``, ``search``) LEFT JOINs
+        ``invocation_details_{suffix}`` for as long as ``invocations_{suffix}``
+        exists, so dropping details early would make those reads raise
+        ``no such table`` for the whole remaining purge window. Once the
+        details DELETE returns 0 we fall through and start draining
+        invocations; when the invocations DELETE returns 0 both tables are
+        dropped together in the same transaction.
+
+        Crash-safety: ``list_partition_suffixes`` keys off the
+        ``invocations_%`` table, so a crash mid-purge leaves the partition
+        discoverable and the next tick resumes.
+        """
+        if not _PARTITION_SUFFIX_RE.match(suffix):
+            raise ValueError(f"invalid partition suffix: {suffix!r}")
+        inv_tbl = f"invocations_{suffix}"
+        det_tbl = f"invocation_details_{suffix}"
+
+        deleted = 0
+        # Details rows first, but keep the (now empty) table around — reads
+        # LEFT JOIN it while invocations still exists.
+        if self._table_exists(det_tbl):
+            cur = self._conn.execute(
+                f"DELETE FROM {det_tbl} "
+                f"WHERE rowid IN (SELECT rowid FROM {det_tbl} LIMIT ?)",
+                (max_rows,),
+            )
+            deleted += cur.rowcount
+            if cur.rowcount > 0:
+                self._conn.commit()
+                return deleted
+            # Drained — fall through to invocations without dropping details.
+
+        if self._table_exists(inv_tbl):
+            cur = self._conn.execute(
+                f"DELETE FROM {inv_tbl} "
+                f"WHERE rowid IN (SELECT rowid FROM {inv_tbl} LIMIT ?)",
+                (max_rows,),
+            )
+            deleted += cur.rowcount
+            if cur.rowcount == 0:
+                # Both drained — drop them together so reads never see an
+                # invocations table without its details counterpart.
+                self._conn.execute(f"DROP TABLE IF EXISTS {inv_tbl}")
+                self._conn.execute(f"DROP TABLE IF EXISTS {det_tbl}")
+                self._ensured_partitions.discard(suffix)
+                logger.info("Purged expired partition %s", suffix)
+
         self._conn.commit()
-        # Legacy tables: drop wholesale once their newest row is past
-        # retention. Cheap to check — single MAX() per table.
-        self._maybe_drop_legacy(cutoff_ts)
-        if dropped or not self._has_legacy_inv:
-            self._reclaim_free_pages()
-        return dropped
+        return deleted
 
-    def _reclaim_free_pages(self) -> None:
-        """Return any freed pages to the OS via incremental_vacuum.
+    @_serialized
+    def vacuum_step(self, max_pages: int) -> int:
+        """Reclaim up to ``max_pages`` free pages to the OS; return remaining.
 
-        No-op unless the DB was created with ``auto_vacuum=INCREMENTAL``;
-        on those DBs it's fast (proportional to free-page count, not DB
-        size). Called after DROP TABLE so file size tracks live data.
+        No-op unless the DB has ``auto_vacuum=INCREMENTAL`` actually in
+        effect. The connect-time PRAGMA only takes effect on a brand-new (or
+        fully VACUUMed) file, so a database created before the pragma was
+        introduced runs in ``auto_vacuum=NONE``: there ``incremental_vacuum``
+        does nothing and ``freelist_count`` never drops. We bail out with 0
+        in that case so the caller's trickle loop can't spin forever.
 
-        The PRAGMA emits one result row per freed page, so the cursor
-        MUST be drained — without ``fetchall()`` only one page gets
-        reclaimed and the file barely shrinks.
+        Otherwise the PRAGMA emits one result row per freed page — bounded
+        here by ``max_pages`` so ``fetchall()`` is fine — and the cursor MUST
+        be drained: without it almost nothing gets reclaimed and the file
+        barely shrinks. Returns the fresh ``freelist_count`` so the caller
+        loops until 0. Bounded chunks also keep the WAL under the 64 MB
+        ``journal_size_limit`` — each commit lets autocheckpoint run.
         """
-        try:
-            row = self._conn.execute("PRAGMA freelist_count").fetchone()
-            free_pages = row[0] if row else 0
-            if free_pages == 0:
-                return
-            self._conn.execute("PRAGMA incremental_vacuum").fetchall()
-            self._conn.commit()
-            logger.info("incremental_vacuum reclaimed %d pages", free_pages)
-        except Exception:
-            logger.exception("incremental_vacuum failed")
+        row = self._conn.execute("PRAGMA auto_vacuum").fetchone()
+        auto_vacuum = row[0] if row else 0
+        if auto_vacuum != 2:  # 2 == INCREMENTAL
+            if not self._warned_auto_vacuum:
+                logger.warning(
+                    "auto_vacuum is not INCREMENTAL — free pages will not be "
+                    "returned to the OS until a full VACUUM"
+                )
+                self._warned_auto_vacuum = True
+            return 0
+        row = self._conn.execute("PRAGMA freelist_count").fetchone()
+        free_pages = row[0] if row else 0
+        if free_pages == 0:
+            return 0
+        self._conn.execute(f"PRAGMA incremental_vacuum({max_pages})").fetchall()
+        self._conn.commit()
+        row = self._conn.execute("PRAGMA freelist_count").fetchone()
+        return row[0] if row else 0
 
     def _maybe_drop_legacy(self, cutoff_ts: float) -> None:
         if self._has_legacy_inv:
@@ -409,6 +477,18 @@ class SQLiteStore:
             self._conn.execute(f"DROP TABLE {LEGACY_DETAILS}")
             self._has_legacy_details = False
         self._conn.commit()
+
+    @_serialized
+    def purge_legacy_tables(self, retention_hours: int) -> None:
+        """Drop legacy pre-partition tables once their newest row is expired.
+
+        Legacy tables are gone in prod; this stays a cheap wholesale drop
+        (single MAX() per table) called once per purge pass. Serialized
+        entry point so the app.py orchestration can run it in the executor
+        without holding the lock itself.
+        """
+        cutoff_ts = time.time() - retention_hours * 3600
+        self._maybe_drop_legacy(cutoff_ts)
 
     # -- read helpers -----------------------------------------------------
 

@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 FRONTEND_DIR = Path(__file__).parent / "frontend_dist"
 
+# Pause between purge chunks so the SQLite write lock is released long enough
+# for the flush loop to interleave. The purge becomes a paced trickle of short
+# lock holds instead of one multi-minute hold — on a large database that hold
+# would starve the flush loop and overflow its write-behind buffer.
+_PURGE_CHUNK_PAUSE_SECONDS = 0.25
+
 
 # ---------------------------------------------------------------------------
 # Background loops
@@ -164,15 +170,79 @@ async def _background_recovery(store: Store, sqlite_store, config: Config) -> No
         logger.exception("Background recovery failed")
 
 
+async def _purge_partitions_chunked(sqlite_store, config, retention_hours) -> int:
+    """Drop expired partitions and reclaim their pages as a paced trickle.
+
+    Each expired partition is deleted in ``sqlite_purge_chunk_rows`` chunks,
+    then the freed pages are returned to the OS in ``sqlite_vacuum_chunk_pages``
+    chunks. Between every chunk we release the event loop (and thus the SQLite
+    write lock) for ``_PURGE_CHUNK_PAUSE_SECONDS`` so the flush loop can
+    interleave — no single lock hold exceeds a couple of seconds. Returns the
+    number of partitions fully purged.
+    """
+    loop = asyncio.get_running_loop()
+
+    expired = await loop.run_in_executor(
+        None, sqlite_store.list_expired_partition_suffixes, retention_hours
+    )
+    for suffix in expired:
+        while True:
+            deleted = await loop.run_in_executor(
+                None,
+                sqlite_store.purge_partition_step,
+                suffix,
+                config.sqlite_purge_chunk_rows,
+            )
+            if deleted == 0:
+                break
+            await asyncio.sleep(_PURGE_CHUNK_PAUSE_SECONDS)
+
+    # Legacy tables: cheap wholesale drop once expired (gone in prod).
+    await loop.run_in_executor(
+        None, sqlite_store.purge_legacy_tables, retention_hours
+    )
+
+    # Reclaim freed pages to the OS in bounded chunks. With chunked deletes
+    # the file only shrinks once these pages are returned, so operators can
+    # compare the freelist size before the trickle against when it hits 0.
+    remaining = await loop.run_in_executor(
+        None, sqlite_store.vacuum_step, config.sqlite_vacuum_chunk_pages
+    )
+    if remaining or expired:
+        logger.info("SQLite vacuum trickle: %d free pages to reclaim", remaining)
+    while remaining > 0:
+        await asyncio.sleep(_PURGE_CHUNK_PAUSE_SECONDS)
+        previous = remaining
+        remaining = await loop.run_in_executor(
+            None, sqlite_store.vacuum_step, config.sqlite_vacuum_chunk_pages
+        )
+        # Concurrent flushes can add free pages between steps, so a step that
+        # doesn't shrink the freelist just means we're not gaining ground this
+        # pass — defer the rest to the next hourly tick instead of spinning.
+        if remaining >= previous:
+            logger.warning(
+                "vacuum not making progress, %d pages remaining — deferring "
+                "to next pass",
+                remaining,
+            )
+            break
+    if expired and remaining == 0:
+        logger.info("SQLite vacuum trickle: freelist drained to 0")
+
+    return len(expired)
+
+
 async def _sqlite_purge_loop(
     store: Store, sqlite_store, config: Config, consumer=None
 ) -> None:
     """Drop expired daily partitions; ensure tomorrow's partition exists.
 
-    With per-day partitioned tables, retention enforcement is a series of
-    DROP TABLE statements — metadata operations that take milliseconds.
-    The previous DELETE-based purge held the SQLite write lock long enough
-    to starve the flush loop and OOM the pod under load spikes.
+    Retention enforcement is chunked into small serialized steps, paced with
+    a short sleep between chunks so the flush loop always gets the write lock.
+    A single DROP-then-vacuum purge can hold the SQLite write lock for many
+    minutes on a large database, which starves the flush loop and overflows
+    its write-behind buffer (dropping records); the trickle keeps every hold
+    short so flushes interleave.
     """
     while True:
         await asyncio.sleep(3600)
@@ -198,15 +268,19 @@ async def _sqlite_purge_loop(
                     "Disk %.0f%% > %d%% cap — emergency purge with %dh retention",
                     disk_pct, config.sqlite_disk_usage_pct_cap, retention_hours,
                 )
-                dropped = await loop.run_in_executor(
-                    None, sqlite_store.purge_old_partitions, retention_hours
+                # Run the full chunked purge INCLUDING the vacuum trickle
+                # before re-checking disk — chunked deletes only shrink the
+                # file after vacuum returns pages, so rechecking earlier would
+                # spuriously halve retention again.
+                dropped = await _purge_partitions_chunked(
+                    sqlite_store, config, retention_hours
                 )
                 if dropped:
                     logger.info("Emergency purge: dropped %d partitions", dropped)
                 disk_pct = await loop.run_in_executor(None, sqlite_store.disk_usage_pct)
         else:
-            dropped = await loop.run_in_executor(
-                None, sqlite_store.purge_old_partitions, retention_hours
+            dropped = await _purge_partitions_chunked(
+                sqlite_store, config, retention_hours
             )
             if dropped:
                 logger.info(

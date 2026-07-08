@@ -24,3 +24,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 phlower = ["frontend_dist/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

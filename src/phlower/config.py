@@ -67,6 +67,12 @@ class Config:
     sqlite_disk_usage_pct_cap: int = field(
         default_factory=lambda: int(os.environ.get("SQLITE_DISK_USAGE_PCT_CAP", "75"))
     )
+    sqlite_purge_chunk_rows: int = field(
+        default_factory=lambda: int(os.environ.get("SQLITE_PURGE_CHUNK_ROWS", "50000"))
+    )
+    sqlite_vacuum_chunk_pages: int = field(
+        default_factory=lambda: int(os.environ.get("SQLITE_VACUUM_CHUNK_PAGES", "10000"))
+    )
     snapshot_interval_seconds: int = field(
         default_factory=lambda: int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS", "60"))
     )

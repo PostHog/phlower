@@ -50,3 +50,87 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ECR_REPOSITORY: posthog-phlower
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # The ordered tag sorts releases by first-parent commit count and ties each one to its commit.
+      - name: Compute source metadata
+        id: source
+        shell: bash
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_AUTHOR: ${{ github.event.head_commit.author.username }}
+          COMMIT_COMMITTER: ${{ github.event.head_commit.committer.username }}
+          LC_ALL: C.UTF-8
+        run: |
+          set -euo pipefail
+          subject="${COMMIT_MESSAGE%%$'\n'*}"
+          if [ -z "${subject}" ]; then
+            subject="$(git log -1 --format=%s)"
+          fi
+          if [ "${#subject}" -gt 160 ]; then
+            subject="${subject:0:157}..."
+          fi
+          position="$(git rev-list --first-parent --count "${GITHUB_SHA}")"
+          ordered_tag="$(printf 'r%012d-%.6s' "${position}" "${GITHUB_SHA}")"
+          [[ "${ordered_tag}" =~ ^r[0-9]{12}-[0-9a-f]{6}$ ]] || {
+            echo "::error::ordered release tag '${ordered_tag}' is malformed"
+            exit 1
+          }
+          {
+            echo "subject=${subject}"
+            echo "author=${COMMIT_AUTHOR:-$(git log -1 --format=%an)}"
+            echo "committer=${COMMIT_COMMITTER:-$(git log -1 --format=%cn)}"
+            echo "timestamp=$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd HEAD)"
+            echo "ordered-tag=${ordered_tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUBLISH_IAM_ROLE }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        id: ecr
+
+      # Annotations go on the image index, which is what registry consumers read for a multi-platform image.
+      - uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        id: meta
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=sha,prefix=sha-,format=long
+            type=raw,value=${{ steps.source.outputs.ordered-tag }},priority=50
+          annotations: |
+            com.posthog.image.author=${{ steps.source.outputs.author }}
+            com.posthog.image.committer=${{ steps.source.outputs.committer }}
+            com.posthog.image.message=${{ steps.source.outputs.subject }}
+            com.posthog.image.commit-timestamp=${{ steps.source.outputs.timestamp }}
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha

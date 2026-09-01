@@ -17,6 +17,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -42,6 +44,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        id: build
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -51,10 +54,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # Promotes the image built above into the release registry by digest, so the released artifact is a CI build of this commit, never a rebuild.
   release:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -114,23 +119,81 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index
         with:
           images: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
-          tags: |
-            type=sha,prefix=sha-,format=long
-            type=raw,value=${{ steps.source.outputs.ordered-tag }},priority=50
+          tags: type=sha,prefix=sha-,format=long
           annotations: |
             com.posthog.image.author=${{ steps.source.outputs.author }}
             com.posthog.image.committer=${{ steps.source.outputs.committer }}
             com.posthog.image.message=${{ steps.source.outputs.subject }}
             com.posthog.image.commit-timestamp=${{ steps.source.outputs.timestamp }}
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      # Each registry write is skipped when its tag already exists at the expected digest, so a rerun repairs a partial publish instead of failing on the immutable repository.
+      - name: Publish release image
+        shell: bash
+        env:
+          SOURCE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SOURCE_DIGEST: ${{ needs.build.outputs.digest }}
+          REPOSITORY: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          ORDERED_TAG: ${{ steps.source.outputs.ordered-tag }}
+          ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
+        run: |
+          set -euo pipefail
 
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
-          cache-from: type=gha
+          inspect_digest() {
+            local output
+            if ! output="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$1" 2>&1)"; then
+              [ "${2:-}" = "report" ] && printf '%s\n' "${output}" >&2
+              return 1
+            fi
+            [[ "${output}" =~ ^\"(sha256:[0-9a-f]{64})\"$ ]] || return 1
+            printf '%s\n' "${BASH_REMATCH[1]}"
+          }
+
+          child_digests() {
+            docker buildx imagetools inspect --raw "$1" | jq -r '[.manifests[].digest] | sort | join(",")'
+          }
+
+          ensure_tag() {
+            local image="$1" expected="$2" source="$3" digest
+            shift 3
+            if digest="$(inspect_digest "${image}")"; then
+              if [ -n "${expected}" ] && [ "${digest}" != "${expected}" ]; then
+                echo "::error::${image} already exists at ${digest}, expected ${expected}" >&2
+                return 1
+              fi
+              echo "reusing ${image}@${digest}" >&2
+            else
+              docker buildx imagetools create "$@" --tag "${image}" "${source}" >&2
+              digest="$(inspect_digest "${image}" report)" || {
+                echo "::error::${image} was not readable after publication" >&2
+                return 1
+              }
+              if [ -n "${expected}" ] && [ "${digest}" != "${expected}" ]; then
+                echo "::error::${image} read back at ${digest}, expected ${expected}" >&2
+                return 1
+              fi
+            fi
+            printf '%s\n' "${digest}"
+          }
+
+          [[ "${SOURCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::the build job did not report a valid image digest"
+            exit 1
+          }
+
+          annotation_args=()
+          while IFS= read -r annotation; do
+            [ -n "${annotation}" ] && annotation_args+=(--annotation "${annotation}")
+          done <<< "${ANNOTATIONS}"
+
+          source_image="${SOURCE_IMAGE,,}@${SOURCE_DIGEST}"
+          release_image="${REPOSITORY}:sha-${GITHUB_SHA}"
+          release_digest="$(ensure_tag "${release_image}" "" "${source_image}" "${annotation_args[@]}")"
+          if release_children="$(child_digests "${release_image}")" \
+            && source_children="$(child_digests "${source_image}")" \
+            && [ "${release_children}" != "${source_children}" ]; then
+            echo "::warning::${release_image} was published from an earlier build of this commit and is kept"
+          fi
+
+          ordered_image="${REPOSITORY}:${ORDERED_TAG}"
+          ensure_tag "${ordered_image}" "${release_digest}" "${REPOSITORY}@${release_digest}" --prefer-index=false >/dev/null
+          echo "published ${ordered_image}@${release_digest}"

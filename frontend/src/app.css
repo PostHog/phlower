@@ -50,6 +50,29 @@ body {
 
 a { color: inherit; text-decoration: none; }
 
+/* Keyboard focus — rows are dense, so draw the ring inside the element */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+::selection { background: rgba(245, 78, 0, 0.18); }
+
+input[type="checkbox"] { accent-color: var(--accent); }
+
+/* Plain text button, matches the 1px-rule chrome */
+.text-btn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 11px;
+  padding: 3px 12px;
+}
+.text-btn:hover { color: var(--fg); border-color: var(--fg-muted); }
+
 *::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 6px; }
@@ -158,6 +181,14 @@ a { color: inherit; text-decoration: none; }
 .heartbeat-dot.disconnected {
   background: var(--bad);
   box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.13);
+  animation: none;
+}
+/* Stream down: numbers are frozen, so dim them */
+.heartbeat.stale .heartbeat-rate,
+.heartbeat.stale .heartbeat-latency { opacity: 0.45; }
+
+@media (prefers-reduced-motion: reduce) {
+  .heartbeat-dot { animation: none; }
 }
 
 @keyframes pulse-dot {
@@ -211,6 +242,11 @@ a { color: inherit; text-decoration: none; }
 }
 
 .facet-row {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -236,6 +272,8 @@ a { color: inherit; text-decoration: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Right-align the trailing group when there is no worker count to push it */
+.facet-label + :not(.facet-workers) { margin-left: auto; }
 
 .facet-workers {
   font-size: 10px;
@@ -363,8 +401,18 @@ a { color: inherit; text-decoration: none; }
   z-index: 2;
   user-select: none;
 }
-.task-table-header .col[style*="cursor"] { cursor: pointer; }
-.task-table-header .col:hover { color: var(--fg); }
+.sort-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sort-btn:hover { color: var(--fg); }
 
 .task-row {
   display: flex;
@@ -393,6 +441,11 @@ a { color: inherit; text-decoration: none; }
 .col-p95 { width: 80px; justify-content: flex-end; padding-right: 8px; font-variant-numeric: tabular-nums; }
 .col-p99 { width: 80px; justify-content: flex-end; padding-right: 8px; font-variant-numeric: tabular-nums; }
 .col-score { width: 56px; justify-content: flex-end; padding-right: 8px; font-variant-numeric: tabular-nums; }
+
+/* Narrow screens: the 1h sparkline gives its width back to the task name */
+@media (max-width: 1199px) {
+  .col-spark { display: none; }
+}
 
 /* Score cells */
 .score-cell {
@@ -439,7 +492,9 @@ a { color: inherit; text-decoration: none; }
   border: none;
   cursor: pointer;
   color: var(--fg-muted);
-  padding: 0;
+  /* Grow the hit area without moving the 10px icon */
+  padding: 6px;
+  margin: -6px;
   line-height: 1;
   display: flex;
   align-items: center;
@@ -488,9 +543,8 @@ a { color: inherit; text-decoration: none; }
   gap: 10px;
   padding: 10px 20px;
   border-bottom: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--bad);
+  border-left: 2px solid var(--bad);
   background: rgba(229, 72, 77, 0.03);
-  cursor: pointer;
 }
 .failure-banner-label {
   font-family: var(--sans);
@@ -509,29 +563,6 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.failure-banner-when {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--fg-muted);
-}
-.failure-banner-toggle {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--fg-dim);
-}
-.failure-banner-detail {
-  padding: 10px 20px 14px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg);
-}
-.failure-banner-meta {
-  display: flex;
-  gap: 18px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--fg-muted);
-  padding-bottom: 6px;
 }
 .failure-banner-args {
   font-family: var(--mono);
@@ -878,6 +909,25 @@ a { color: inherit; text-decoration: none; }
   padding: 8px 20px 14px;
   border-bottom: 1px solid var(--border-subtle);
 }
+.lifecycle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.lifecycle-labels {
+  display: flex;
+  justify-content: space-between;
+}
+.lifecycle-bar {
+  height: 8px;
+  opacity: 0.7;
+  border-left: 1px solid var(--fg);
+  border-right: 1px solid var(--fg);
+}
 
 /* Two-column body */
 .inv-body {
@@ -1139,3 +1189,6 @@ a { color: inherit; text-decoration: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Error / retry reason in the invocation code column */
+.code-block-section .txt-bad { color: var(--bad); }

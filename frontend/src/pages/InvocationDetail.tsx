@@ -3,13 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { InvocationRecord } from "../api/client";
 import { invocationDetailOptions } from "../api/generated/@tanstack/react-query.gen";
 import { Badge } from "../components/Badge";
-import { fmtMs, fmtTsFull } from "../util";
+import { errorLine, fmtMs, fmtTs, fmtTsFull } from "../util";
 
 export function InvocationDetail() {
   const { taskId } = useParams<{ taskId: string }>();
   const id = taskId!;
 
-  const { data: inv } = useQuery({
+  const { data: inv, isPending } = useQuery({
     ...invocationDetailOptions({ path: { task_id: id } }),
   });
 
@@ -18,11 +18,13 @@ export function InvocationDetail() {
       <div className="main-content">
         <div className="main-scroll">
           <div className="inv-header">
-            <Link to="/" className="back-btn" style={{ textDecoration: "none" }}>← Tasks</Link>
-            <h1>Invocation not found</h1>
+            <Link to="/" className="back-btn">← Tasks</Link>
+            <h1>{isPending ? id : "Invocation not found"}</h1>
           </div>
           <div className="empty-state">
-            No record for task id <code>{id}</code>. It may have been evicted or never observed.
+            {isPending
+              ? "Loading…"
+              : <>No record for task id <code>{id}</code>. It may have been evicted or never observed.</>}
           </div>
         </div>
       </div>
@@ -32,6 +34,7 @@ export function InvocationDetail() {
   const runtimeMs = inv.runtime_ms ?? 0;
   const terminal = ["SUCCESS", "FAILURE", "RETRY"].includes(inv.state);
   const partial = terminal && !inv.args_preview && !inv.kwargs_preview && !inv.traceback_snippet && inv.transitions.length === 0;
+  const error = inv.state === "FAILURE" || inv.state === "RETRY" ? errorLine(inv) : null;
 
   return (
     <div className="main-content">
@@ -118,29 +121,25 @@ export function InvocationDetail() {
                 <pre className="code-block-body">{inv.kwargs_preview}</pre>
               </div>
             )}
-            {inv.state === "FAILURE" && inv.exception_type && (
-              <>
-                <div className="code-block-section">
-                  <div className="code-block-label" style={{ color: "var(--bad)" }}>Error</div>
-                  <pre className="code-block-body" style={{ color: "var(--bad)" }}>
-                    {inv.exception_type}: {inv.exception_message}
-                  </pre>
-                </div>
-                {inv.traceback_snippet && (
-                  <div className="code-block-section">
-                    <div className="code-block-label">Traceback</div>
-                    <pre className="code-block-body">{inv.traceback_snippet}</pre>
-                  </div>
-                )}
-              </>
+            {error && (
+              <div className="code-block-section">
+                <div className="code-block-label txt-bad">{inv.state === "RETRY" ? "Retry reason" : "Error"}</div>
+                <pre className="code-block-body txt-bad">{error}</pre>
+              </div>
             )}
-            {!inv.args_preview && !inv.kwargs_preview && !inv.exception_type && (
+            {inv.traceback_snippet && (
+              <div className="code-block-section">
+                <div className="code-block-label">Traceback</div>
+                <pre className="code-block-body">{inv.traceback_snippet}</pre>
+              </div>
+            )}
+            {!inv.args_preview && !inv.kwargs_preview && !error && (
               <div className="empty-state">
                 <p>No args/kwargs/error data available.</p>
                 {partial && (
                   <p style={{ marginTop: 4, fontSize: 11 }}>
-                    Partial record — args, kwargs, and traceback were removed after ≈8h to save storage.
-                    Metadata (timestamps, state, worker, queue) is retained for up to 7 days.
+                    Partial record — args, kwargs, and traceback are not stored for high-rate
+                    tasks to save storage. Metadata (timestamps, state, worker, queue) is still kept.
                   </p>
                 )}
               </div>
@@ -152,36 +151,27 @@ export function InvocationDetail() {
   );
 }
 
+/** Plain HTML so the 10px labels stay 10px at any width (an SVG viewBox scaled them up). */
 function LifecycleTimeline({ inv, runtimeMs }: { inv: InvocationRecord; runtimeMs: number }) {
-  const w = 900;
-  const pad = 12;
-  const innerW = w - pad * 2;
-  const barY = 22;
-  const barH = 8;
   const color =
     inv.state === "SUCCESS" ? "var(--success)" :
     inv.state === "FAILURE" ? "var(--bad)" :
     "var(--warn)";
+  const endLabel = inv.state === "SUCCESS" ? "finished" : inv.state === "FAILURE" ? "failed" : "pending";
 
   return (
-    <svg width="100%" viewBox={`0 0 ${w} 62`} style={{ display: "block" }}>
-      <line x1={pad} y1={barY + barH / 2} x2={w - pad} y2={barY + barH / 2} stroke="var(--border-subtle)" strokeWidth="1" />
-      <rect x={pad} y={barY} width={innerW} height={barH} fill={color} opacity="0.35" />
-      <rect x={pad} y={barY} width={innerW} height={barH} fill={color} opacity="0.7" />
-      <line x1={pad} y1={barY - 4} x2={pad} y2={barY + barH + 4} stroke="var(--fg)" strokeWidth="1" />
-      <line x1={w - pad} y1={barY - 4} x2={w - pad} y2={barY + barH + 4} stroke="var(--fg)" strokeWidth="1" />
-      <text x={pad} y={14} fontFamily="var(--mono)" fontSize="10" fill="var(--fg-muted)">received</text>
-      <text x={pad} y={56} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)">{fmtTsFull(inv.received_at).slice(11)}</text>
-      <text x={w - pad} y={14} fontFamily="var(--mono)" fontSize="10" fill="var(--fg-muted)" textAnchor="end">
-        {inv.state === "SUCCESS" ? "finished" : inv.state === "FAILURE" ? "failed" : "pending"}
-      </text>
-      <text x={w - pad} y={56} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)" textAnchor="end">
-        {fmtTsFull(inv.finished_at).slice(11)}
-      </text>
-      <text x={w / 2} y={barY - 4} fontFamily="var(--mono)" fontSize="10" fill="var(--fg)" textAnchor="middle" fontWeight="500">
-        {fmtMs(runtimeMs)}
-      </text>
-    </svg>
+    <div className="lifecycle">
+      <div className="lifecycle-labels">
+        <span className="txt-muted">received</span>
+        <span>{fmtMs(runtimeMs)}</span>
+        <span className="txt-muted">{endLabel}</span>
+      </div>
+      <div className="lifecycle-bar" style={{ background: color }} />
+      <div className="lifecycle-labels">
+        <span>{fmtTs(inv.received_at)}</span>
+        <span>{fmtTs(inv.finished_at)}</span>
+      </div>
+    </div>
   );
 }
 

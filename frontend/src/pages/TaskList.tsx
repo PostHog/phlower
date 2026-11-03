@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { TaskSummary } from "../api/client";
 import { listTasksOptions, metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { useBookmarks } from "../hooks/useBookmarks";
@@ -177,13 +177,13 @@ export function TaskList() {
               {queueFilter !== "__all" && (
                 <span className="filter-chip">
                   queue = {queueFilter}
-                  <button onClick={() => setQueueFilter("__all")}>×</button>
+                  <button aria-label="Clear queue filter" onClick={() => setQueueFilter("__all")}>×</button>
                 </span>
               )}
               {workerFilter !== "__all" && (
                 <span className="filter-chip">
                   worker = {workerFilter}
-                  <button onClick={() => setWorkerFilter("__all")}>×</button>
+                  <button aria-label="Clear worker filter" onClick={() => setWorkerFilter("__all")}>×</button>
                 </span>
               )}
             </div>
@@ -219,10 +219,16 @@ export function TaskList() {
             </div>
           ) : (
             <div className="empty-state">
-              <p>No tasks match the current filter.</p>
-              <p style={{ marginTop: 8 }}>
-                Make sure workers run with <code>-E</code> (events enabled) and the broker URL is correct.
-              </p>
+              {filterActive ? (
+                <p>No tasks match the current filter.</p>
+              ) : (
+                <>
+                  <p>No task events seen yet.</p>
+                  <p style={{ marginTop: 8 }}>
+                    Make sure workers run with <code>-E</code> (events enabled) and the broker URL is correct.
+                  </p>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -248,15 +254,14 @@ function SortHeader({
   children: React.ReactNode;
   title?: string;
 }) {
-  const indicator = current === sortKey ? (dir === "asc" ? " ↑" : " ↓") : "";
+  const active = current === sortKey;
+  const indicator = active ? (dir === "asc" ? " ↑" : " ↓") : "";
+  const ariaSort = active ? (dir === "asc" ? "ascending" : "descending") : "none";
   return (
-    <div
-      className={className}
-      style={{ cursor: "pointer" }}
-      title={title}
-      onClick={() => onClick(sortKey)}
-    >
-      {children}{indicator}
+    <div className={className} role="columnheader" aria-sort={ariaSort}>
+      <button className="sort-btn" title={title} onClick={() => onClick(sortKey)}>
+        {children}{indicator}
+      </button>
     </div>
   );
 }
@@ -282,13 +287,22 @@ function TaskRow({
     "txt-muted";
 
   return (
-    <div className="task-row" onClick={onClick}>
+    <div
+      className="task-row"
+      onClick={(e) => {
+        // Let the name link and bookmark button handle their own clicks
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        onClick();
+      }}
+    >
       <div className="col col-bm">
         <BookmarkButton taskName={t.task_name} />
       </div>
       <div className="col col-name">
         <StatusDot failRate={t.failure_rate} retryCount={t.retry_count} />
-        <span className="task-name" title={t.task_name}>{shortTaskName(t.task_name)}</span>
+        <Link className="task-name" title={t.task_name} to={`/tasks/${encodeURIComponent(t.task_name)}`}>
+          {shortTaskName(t.task_name)}
+        </Link>
       </div>
       <div className="col col-spark">
         <Sparkline values={t.sparkline} />
@@ -331,7 +345,7 @@ function FacetRow({
   const waitColor = waitMs != null && waitMs > 5000 ? "var(--bad)" : waitMs != null && waitMs > 1000 ? "var(--warn)" : "var(--fg-dim)";
 
   return (
-    <div className={`facet-row${active ? " active" : ""}`} onClick={onClick}>
+    <button className={`facet-row${active ? " active" : ""}`} aria-pressed={active} onClick={onClick}>
       <span className="facet-label">{label}</span>
       {workerCount != null && workerCount > 0 && (
         <span className="facet-workers" title={`${workerCount} worker${workerCount !== 1 ? "s" : ""}`}>{workerCount}w</span>
@@ -348,7 +362,7 @@ function FacetRow({
         />
       )}
       <span className="facet-count">{count}</span>
-    </div>
+    </button>
   );
 }
 

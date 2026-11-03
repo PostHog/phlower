@@ -1,13 +1,12 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api, type InvocationRecord } from "../api/client";
 import { metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { StateLabel } from "../components/Badge";
 import { fmtMs, fmtTs, shortTaskName } from "../util";
 
 export function Search() {
-  const navigate = useNavigate();
   const { data: meta } = useQuery({ ...metaOptions(), refetchInterval: 30000 });
 
   const [q, setQ] = useState("");
@@ -26,8 +25,10 @@ export function Search() {
     const params: Record<string, string> = {};
     if (q) params.q = q;
 
+    // The API takes a single status. With two states checked, sending only
+    // the first one dropped the other; fetch all and let the client filter.
     const activeStates = Object.entries(states).filter(([, v]) => v).map(([k]) => k);
-    if (activeStates.length > 0 && activeStates.length < 3) {
+    if (activeStates.length === 1) {
       params.status = activeStates[0];
     }
 
@@ -89,11 +90,12 @@ export function Search() {
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") doSearch(); }}
             placeholder="Free-text: args, kwargs, error text, id…"
+            aria-label="Search invocations"
           />
-          {q && <button className="search-clear" onClick={() => { setQ(""); }}>×</button>}
+          {q && <button className="search-clear" aria-label="Clear search" onClick={() => { setQ(""); }}>×</button>}
           <button
+            className="text-btn"
             onClick={doSearch}
-            style={{ appearance: "none", background: "transparent", border: "1px solid var(--border)", color: "var(--fg-muted)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 11, padding: "3px 12px" }}
           >
             {isFetching ? "…" : "Search"}
           </button>
@@ -108,18 +110,14 @@ export function Search() {
             <div style={{ width: 74 }}>Received</div>
             <div style={{ width: 74 }}>State</div>
             <div style={{ flex: "2 1 0" }}>Task</div>
-            <div style={{ flex: "1.6 1 0" }}>Args</div>
+            <div style={{ flex: "1.6 1 0" }}>Args / kwargs</div>
             <div style={{ width: 100 }}>Queue</div>
             <div style={{ width: 70, textAlign: "right" }}>Runtime</div>
             <div style={{ width: 120, textAlign: "right" }}>Task ID</div>
           </div>
           {filtered.length > 0 ? (
             filtered.map((inv) => (
-              <SearchResultRow
-                key={inv.task_id}
-                inv={inv}
-                onClick={() => navigate(`/invocations/${inv.task_id}`)}
-              />
+              <SearchResultRow key={inv.task_id} inv={inv} />
             ))
           ) : results ? (
             <div className="empty-state">No results. Try adjusting your filters.</div>
@@ -132,9 +130,16 @@ export function Search() {
   );
 }
 
-function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () => void }) {
+/** Tasks called with kwargs only show "()" as args; show whichever carries data. */
+function callPreview(inv: InvocationRecord): string {
+  const args = inv.args_preview && inv.args_preview !== "()" ? inv.args_preview : null;
+  const kwargs = inv.kwargs_preview && inv.kwargs_preview !== "{}" ? inv.kwargs_preview : null;
+  return [args, kwargs].filter(Boolean).join(" ");
+}
+
+function SearchResultRow({ inv }: { inv: InvocationRecord }) {
   return (
-    <div className="search-result-row" onClick={onClick}>
+    <Link className="search-result-row" to={`/invocations/${inv.task_id}`}>
       <div style={{ width: 74, color: "var(--fg-muted)", fontVariantNumeric: "tabular-nums" }}>
         {fmtTs(inv.received_at)}
       </div>
@@ -145,7 +150,7 @@ function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () 
         {shortTaskName(inv.task_name)}
       </div>
       <div style={{ flex: "1.6 1 0", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-muted)" }}>
-        {inv.args_preview ?? ""}
+        {callPreview(inv)}
       </div>
       <div style={{ width: 100, color: "var(--fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {inv.queue ?? ""}
@@ -156,7 +161,7 @@ function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () 
       <div style={{ width: 120, textAlign: "right", color: "var(--fg-muted)", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>
         {inv.task_id.slice(0, 18)}…
       </div>
-    </div>
+    </Link>
   );
 }
 

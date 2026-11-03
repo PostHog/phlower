@@ -18,7 +18,9 @@ type SearchRequest = { params: Record<string, string>; statuses: string[] };
 async function searchByStates({ params, statuses }: SearchRequest): Promise<InvocationRecord[]> {
   if (statuses.length === 0) return api.search(params);
   const lists = await Promise.all(statuses.map((status) => api.search({ ...params, status })));
-  return lists.flat().sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0));
+  // Same order as the backend; retries have no finished_at.
+  const sortKey = (inv: InvocationRecord) => inv.updated_at ?? inv.received_at ?? 0;
+  return lists.flat().sort((a, b) => sortKey(b) - sortKey(a));
 }
 
 export function Search() {

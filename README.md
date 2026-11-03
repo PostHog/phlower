@@ -83,7 +83,7 @@ Without `SQLITE_PATH`, Phlower runs entirely in memory. A restart loses all hist
 
 Setting `SQLITE_PATH` enables a WAL-mode SQLite database that serves two purposes:
 
-**Invocation history** — every completed task invocation (success, failure, retry) is written as an individual row. This powers the search/detail UI and lets you look up historical invocations that have already been evicted from memory. Rows are written in 1.5s batches. Detail fields (args, kwargs, traceback) are thinned after `SQLITE_DETAIL_HOURS` to save space. Rows older than `AGGREGATE_RETENTION_HOURS` are purged entirely.
+**Invocation history** — every completed task invocation (success, failure, retry) is written as an individual row. This powers the search/detail UI and lets you look up historical invocations that have already been evicted from memory. Rows are written in 1.5s batches. Detail fields (args, kwargs, traceback) are thinned after `SQLITE_DETAIL_HOURS` to save space. Rows older than `AGGREGATE_RETENTION_HOURS` are purged entirely. Tracebacks and exception messages are truncated when the event is ingested, before they reach memory, the SSE stream or SQLite: tracebacks keep their last `MAX_TRACEBACK_CHARS` characters (the final frames and exception line), messages keep their first `MAX_EXCEPTION_CHARS`. The full payload is not stored anywhere.
 
 **Aggregate snapshots** — every `SNAPSHOT_INTERVAL_SECONDS`, Phlower serializes the in-memory TaskAggregate state (hourly counters, TDigest percentiles, exception/worker/queue distributions) as compressed blobs. On restart, these snapshots are restored directly instead of replaying individual rows. A short gap-replay covers events between the last snapshot and the crash/shutdown.
 

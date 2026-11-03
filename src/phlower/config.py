@@ -41,6 +41,12 @@ class Config:
     max_kwargs_preview_chars: int = field(
         default_factory=lambda: int(os.environ.get("MAX_KWARGS_PREVIEW_CHARS", "1000"))
     )
+    max_traceback_chars: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_TRACEBACK_CHARS", "4000"))
+    )
+    max_exception_chars: int = field(
+        default_factory=lambda: int(os.environ.get("MAX_EXCEPTION_CHARS", "1000"))
+    )
     max_runtime_buffer: int = field(
         default_factory=lambda: int(
             os.environ.get("MAX_RUNTIME_BUFFER_PER_TASK", "10000")

@@ -320,6 +320,28 @@ class TaskAggregate:
 
 
 # ---------------------------------------------------------------------------
+# Text caps
+# ---------------------------------------------------------------------------
+
+TRUNCATION_MARKER = "…"
+
+
+def truncate_text(text: str | None, max_chars: int, *, keep_tail: bool = False) -> str | None:
+    """Cap ``text`` at ``max_chars`` and mark the cut with an ellipsis.
+
+    Tracebacks keep the tail (last frames and the exception line), everything
+    else keeps the head.
+    """
+    if text is None:
+        return None
+    if len(text) <= max_chars:
+        return text
+    if keep_tail:
+        return TRUNCATION_MARKER + "\n" + text[len(text) - max_chars :]
+    return text[:max_chars] + TRUNCATION_MARKER
+
+
+# ---------------------------------------------------------------------------
 # Global store
 # ---------------------------------------------------------------------------
 
@@ -617,8 +639,12 @@ class Store:
                 runtime_ms = (ts - rec.started_at) * 1000
             rec.runtime_ms = runtime_ms
             rec.exception_type = exception_type
-            rec.exception_message = exception_message
-            rec.traceback_snippet = traceback_snippet
+            rec.exception_message = truncate_text(
+                exception_message, self.config.max_exception_chars
+            )
+            rec.traceback_snippet = truncate_text(
+                traceback_snippet, self.config.max_traceback_chars, keep_tail=True
+            )
             rec.updated_at = ts
             rec.transitions.append((TaskState.FAILURE, ts))
             self._dirty_tasks.add(name)
@@ -654,8 +680,12 @@ class Store:
             rec.state = TaskState.RETRY
             rec.retries += 1
             rec.exception_type = exception_type
-            rec.exception_message = exception_message
-            rec.traceback_snippet = traceback_snippet
+            rec.exception_message = truncate_text(
+                exception_message, self.config.max_exception_chars
+            )
+            rec.traceback_snippet = truncate_text(
+                traceback_snippet, self.config.max_traceback_chars, keep_tail=True
+            )
             rec.updated_at = ts
             rec.transitions.append((TaskState.RETRY, ts))
             self._dirty_tasks.add(name)

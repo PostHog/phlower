@@ -68,6 +68,8 @@ All via environment variables:
 | `AGGREGATE_RETENTION_HOURS` | `168` | Hourly rollup retention (7 days) |
 | `MAX_GLOBAL_INVOCATIONS` | `100000` | Total invocation records in memory |
 | `MAX_INVOCATIONS_PER_TASK` | `10000` | Per-task invocation cap |
+| `MAX_TRACEBACK_CHARS` | `4000` | Max stored traceback length; keeps the tail (last frames + exception line) |
+| `MAX_EXCEPTION_CHARS` | `1000` | Max stored exception message length; keeps the head |
 | `TASK_ALLOWLIST_REGEX` | `.*` | Only track matching task names |
 | `SSE_THROTTLE_SECONDS` | `0.3` | SSE push interval |
 | `SQLITE_PATH` | unset | Path to SQLite DB. Enables persistence when set. |

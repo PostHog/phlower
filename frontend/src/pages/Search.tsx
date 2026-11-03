@@ -1,23 +1,39 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api, type InvocationRecord } from "../api/client";
 import { metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { StateLabel } from "../components/Badge";
 import { fmtMs, fmtTs, shortTaskName } from "../util";
 
+const ALL_STATES = ["SUCCESS", "FAILURE", "RETRY"];
+
+type SearchRequest = { params: Record<string, string>; statuses: string[] };
+
+/**
+ * The API filters by one status and limits results after that. For a partial
+ * set of states, ask once per state so newer successes can't push the
+ * failures and retries out of a mixed result.
+ */
+async function searchByStates({ params, statuses }: SearchRequest): Promise<InvocationRecord[]> {
+  if (statuses.length === 0) return api.search(params);
+  const lists = await Promise.all(statuses.map((status) => api.search({ ...params, status })));
+  // Same order as the backend; retries have no finished_at.
+  const sortKey = (inv: InvocationRecord) => inv.updated_at ?? inv.received_at ?? 0;
+  return lists.flat().sort((a, b) => sortKey(b) - sortKey(a));
+}
+
 export function Search() {
-  const navigate = useNavigate();
   const { data: meta } = useQuery({ ...metaOptions(), refetchInterval: 30000 });
 
   const [q, setQ] = useState("");
   const [states, setStates] = useState<Record<string, boolean>>({ SUCCESS: true, FAILURE: true, RETRY: true });
   const [queueFilter, setQueueFilter] = useState<Record<string, boolean>>({});
-  const [submitted, setSubmitted] = useState<Record<string, string>>({});
+  const [submitted, setSubmitted] = useState<SearchRequest>({ params: {}, statuses: [] });
 
   const { data: results, isFetching } = useQuery({
     queryKey: ["search", submitted],
-    queryFn: () => api.search(submitted),
+    queryFn: () => searchByStates(submitted),
     enabled: true,
   });
 
@@ -26,15 +42,14 @@ export function Search() {
     const params: Record<string, string> = {};
     if (q) params.q = q;
 
+    // All states checked is the same as no status filter.
     const activeStates = Object.entries(states).filter(([, v]) => v).map(([k]) => k);
-    if (activeStates.length > 0 && activeStates.length < 3) {
-      params.status = activeStates[0];
-    }
+    const statuses = activeStates.length === ALL_STATES.length ? [] : activeStates;
 
     const activeQueues = Object.entries(queueFilter).filter(([, v]) => v).map(([k]) => k);
     if (activeQueues.length === 1) params.queue = activeQueues[0];
 
-    setSubmitted(params);
+    setSubmitted({ params, statuses });
   }
 
   // Auto-search on facet change
@@ -89,11 +104,12 @@ export function Search() {
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") doSearch(); }}
             placeholder="Free-text: args, kwargs, error text, id…"
+            aria-label="Search invocations"
           />
-          {q && <button className="search-clear" onClick={() => { setQ(""); }}>×</button>}
+          {q && <button className="search-clear" aria-label="Clear search" onClick={() => { setQ(""); }}>×</button>}
           <button
+            className="text-btn"
             onClick={doSearch}
-            style={{ appearance: "none", background: "transparent", border: "1px solid var(--border)", color: "var(--fg-muted)", cursor: "pointer", fontFamily: "var(--sans)", fontSize: 11, padding: "3px 12px" }}
           >
             {isFetching ? "…" : "Search"}
           </button>
@@ -108,18 +124,14 @@ export function Search() {
             <div style={{ width: 74 }}>Received</div>
             <div style={{ width: 74 }}>State</div>
             <div style={{ flex: "2 1 0" }}>Task</div>
-            <div style={{ flex: "1.6 1 0" }}>Args</div>
+            <div style={{ flex: "1.6 1 0" }}>Args / kwargs</div>
             <div style={{ width: 100 }}>Queue</div>
             <div style={{ width: 70, textAlign: "right" }}>Runtime</div>
             <div style={{ width: 120, textAlign: "right" }}>Task ID</div>
           </div>
           {filtered.length > 0 ? (
             filtered.map((inv) => (
-              <SearchResultRow
-                key={inv.task_id}
-                inv={inv}
-                onClick={() => navigate(`/invocations/${inv.task_id}`)}
-              />
+              <SearchResultRow key={inv.task_id} inv={inv} />
             ))
           ) : results ? (
             <div className="empty-state">No results. Try adjusting your filters.</div>
@@ -132,9 +144,16 @@ export function Search() {
   );
 }
 
-function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () => void }) {
+/** Tasks called with kwargs only show "()" as args; show whichever carries data. */
+function callPreview(inv: InvocationRecord): string {
+  const args = inv.args_preview && inv.args_preview !== "()" ? inv.args_preview : null;
+  const kwargs = inv.kwargs_preview && inv.kwargs_preview !== "{}" ? inv.kwargs_preview : null;
+  return [args, kwargs].filter(Boolean).join(" ");
+}
+
+function SearchResultRow({ inv }: { inv: InvocationRecord }) {
   return (
-    <div className="search-result-row" onClick={onClick}>
+    <Link className="search-result-row" to={`/invocations/${inv.task_id}`}>
       <div style={{ width: 74, color: "var(--fg-muted)", fontVariantNumeric: "tabular-nums" }}>
         {fmtTs(inv.received_at)}
       </div>
@@ -145,7 +164,7 @@ function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () 
         {shortTaskName(inv.task_name)}
       </div>
       <div style={{ flex: "1.6 1 0", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-muted)" }}>
-        {inv.args_preview ?? ""}
+        {callPreview(inv)}
       </div>
       <div style={{ width: 100, color: "var(--fg-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {inv.queue ?? ""}
@@ -156,7 +175,7 @@ function SearchResultRow({ inv, onClick }: { inv: InvocationRecord; onClick: () 
       <div style={{ width: 120, textAlign: "right", color: "var(--fg-muted)", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>
         {inv.task_id.slice(0, 18)}…
       </div>
-    </div>
+    </Link>
   );
 }
 

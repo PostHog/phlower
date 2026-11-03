@@ -1,4 +1,4 @@
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -29,9 +29,8 @@ ChartJS.register(
 export function TaskDetail() {
   const { taskName } = useParams<{ taskName: string }>();
   const name = taskName!;
-  const navigate = useNavigate();
 
-  const { data: summary } = useQuery({
+  const { data: summary, isError: summaryError } = useQuery({
     ...taskSummaryOptions({ path: { task_name: name } }),
     refetchInterval: 5000,
   });
@@ -97,50 +96,54 @@ export function TaskDetail() {
     });
   }, [name, invocations]);
 
-  // ── Failure banner state ──
-  const [failureBannerOpen, setFailureBannerOpen] = useState(false);
-
-  if (!summary) return null;
+  if (!summary) {
+    return (
+      <div className="main-content">
+        <div className="detail-header">
+          <Link to="/" className="back-btn">← Tasks</Link>
+          <h1>{name}</h1>
+        </div>
+        <div className="empty-state">
+          {summaryError ? "No data for this task in the retention window." : "Loading…"}
+        </div>
+      </div>
+    );
+  }
 
   const labels = latency.map((d) => new Date(d.t * 1000));
   const topFailure = summary.top_exceptions[0];
 
-  // Sort invocations newest-first for the runs ledger display
-  const runsNewestFirst = [...invocations].reverse();
+  // Newest first by received time, which is the column the ledger shows
+  const runsNewestFirst = [...invocations].sort(
+    (a, b) => (b.received_at ?? b.updated_at ?? 0) - (a.received_at ?? a.updated_at ?? 0)
+  );
+
+  const workerCount = summary.top_workers.length;
+  const headerMeta = [
+    summary.top_queues[0] ? `queue=${summary.top_queues[0].queue}` : null,
+    workerCount > 0 ? `${workerCount} worker${workerCount === 1 ? "" : "s"}` : null,
+    "24h",
+  ].filter(Boolean).join(" · ");
 
   return (
     <div className="main-content" style={{ display: "flex", flexDirection: "column" }}>
       {/* Header — fixed, not scrolling */}
       <div className="detail-header">
-          <Link to="/" className="back-btn" style={{ textDecoration: "none" }}>← Tasks</Link>
+          <Link to="/" className="back-btn">← Tasks</Link>
           <h1>{name}</h1>
           <BookmarkButton taskName={name} size={12} />
           <div style={{ flex: 1 }} />
-          <span className="detail-header-meta">
-            {summary.top_queues[0] && `queue=${summary.top_queues[0].queue}`}
-            {summary.top_workers.length > 0 && ` · ${summary.top_workers.length} workers`}
-            {" · 24h"}
-          </span>
+          <span className="detail-header-meta">{headerMeta}</span>
         </div>
 
       {/* Scrollable area for failure banner + bloomberg grid */}
       <div className="detail-scroll">
-        {/* Failure banner */}
+        {/* Most frequent failure class in the window, not the latest one */}
         {topFailure && (
-          <>
-            <div className="failure-banner" onClick={() => setFailureBannerOpen(!failureBannerOpen)}>
-              <span className="failure-banner-label">Last failure</span>
-              <span className="failure-banner-msg">{topFailure.type} ({topFailure.count})</span>
-              <span className="failure-banner-toggle">{failureBannerOpen ? "−" : "+"}</span>
-            </div>
-            {failureBannerOpen && (
-              <div className="failure-banner-detail">
-                <div className="failure-banner-meta">
-                  <span>count={topFailure.count}</span>
-                </div>
-              </div>
-            )}
-          </>
+          <div className="failure-banner">
+            <span className="failure-banner-label">Top failure</span>
+            <span className="failure-banner-msg">{topFailure.type} ({topFailure.count})</span>
+          </div>
         )}
 
         {/* Bloomberg 12-col grid */}
@@ -148,8 +151,8 @@ export function TaskDetail() {
           {/* Row 1: 6 number panes */}
           <NumPane span={2} label="Rate" value={fmtPerMin(summary.rate_per_min)} />
           <NumPane span={2} label="Total 24h" value={fmtNum(summary.total_count)} />
-          <NumPane span={2} label="Success" value={fmtNum(summary.success_count)} accent="var(--success)" />
-          <NumPane span={2} label="Fail rate" value={fmtRate(summary.failure_rate)} accent={summary.failure_rate > 0 ? "var(--bad)" : undefined} />
+          <NumPane span={2} label="Success" value={fmtNum(summary.success_count)} accent="var(--success-text)" />
+          <NumPane span={2} label="Fail rate" value={fmtRate(summary.failure_rate)} accent={summary.failure_rate > 0 ? "var(--bad-text)" : undefined} />
           <NumPane span={2} label="Active" value={String(summary.active_count)} accent={summary.active_count > 0 ? "var(--active-blue)" : undefined} />
           <NumPane span={2} label="Retries" value={fmtNum(summary.retry_count)} />
 
@@ -254,7 +257,6 @@ export function TaskDetail() {
           runs={runsNewestFirst}
           hasOlder={hasOlder}
           onLoadOlder={loadOlder}
-          onOpenRun={(inv) => navigate(`/invocations/${inv.task_id}`)}
         />
       </div>
     </div>
@@ -274,12 +276,10 @@ function RunsLedger({
   runs,
   hasOlder,
   onLoadOlder,
-  onOpenRun,
 }: {
   runs: InvocationRecord[];
   hasOlder: boolean;
   onLoadOlder: () => void;
-  onOpenRun: (inv: InvocationRecord) => void;
 }) {
   const [query, setQuery] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -310,9 +310,11 @@ function RunsLedger({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Find by id, arg, error…"
+            aria-label="Filter invocations"
           />
           {query && (
             <button
+              aria-label="Clear filter"
               onClick={() => setQuery("")}
               style={{ appearance: "none", background: "transparent", border: 0, color: "var(--fg-muted)", cursor: "pointer", padding: 0, fontSize: 12 }}
             >×</button>
@@ -343,7 +345,7 @@ function RunsLedger({
                 key={r.task_id}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}
               >
-                <div className="runs-row" onClick={() => onOpenRun(r)}>
+                <Link className="runs-row" to={`/invocations/${r.task_id}`}>
                   <div style={{ flex: "1.4 1 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.task_id}</div>
                   <div style={{ width: 68 }}>
                     <span className={`state-label ${stateClass}`}>{r.state}</span>
@@ -351,7 +353,7 @@ function RunsLedger({
                   <div style={{ flex: "2 1 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--fg-muted)" }}>{r.worker ?? "—"}</div>
                   <div style={{ width: 70, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMs(r.runtime_ms)}</div>
                   <div style={{ width: 80, textAlign: "right", color: "var(--fg-muted)", fontVariantNumeric: "tabular-nums" }}>{fmtTs(r.received_at)}</div>
-                </div>
+                </Link>
               </div>
             );
           })}

@@ -14,7 +14,8 @@ export function Sparkline({
   strokeWidth = 1,
 }: Props) {
   const n = values.length;
-  if (n === 0) return <svg width={width} height={height} />;
+  // A line needs two points; with one, step = width / 0 and every point is NaN
+  if (n < 2) return <svg width={width} height={height} aria-hidden="true" />;
   const max = Math.max(...values);
   const min = Math.min(...values);
   const span = max - min || 1;
@@ -29,7 +30,7 @@ export function Sparkline({
     .join(" ");
 
   return (
-    <svg width={width} height={height} style={{ display: "block", overflow: "visible" }}>
+    <svg width={width} height={height} style={{ display: "block", overflow: "visible" }} aria-hidden="true">
       <polyline
         points={points}
         fill="none"

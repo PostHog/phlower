@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, NavLink, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useSSE } from "./hooks/useSSE";
 import { BrokerStatus } from "./components/BrokerStatus";
@@ -16,13 +16,12 @@ const queryClient = new QueryClient({
   },
 });
 
-function Topbar() {
+function Topbar({ streamConnected }: { streamConnected: boolean }) {
   const location = useLocation();
-  const navigate = useNavigate();
   const isSearch = location.pathname === "/search";
 
   return (
-    <div className="topbar">
+    <header className="topbar">
       <div className="topbar-left">
         <Link to="/" className="logo">
           <Logo />
@@ -33,23 +32,26 @@ function Topbar() {
             ower
           </span>
         </Link>
-        <div className="nav-tabs">
-          <button
+        <nav className="nav-tabs">
+          {/* Task and invocation detail pages belong to the Tasks tab */}
+          <NavLink
+            to="/"
             className={`nav-tab${!isSearch ? " active" : ""}`}
-            onClick={() => navigate("/")}
+            aria-current={!isSearch ? "page" : undefined}
           >
             Tasks
-          </button>
-          <button
+          </NavLink>
+          <NavLink
+            to="/search"
             className={`nav-tab${isSearch ? " active" : ""}`}
-            onClick={() => navigate("/search")}
+            aria-current={isSearch ? "page" : undefined}
           >
             Search
-          </button>
-        </div>
+          </NavLink>
+        </nav>
       </div>
-      <BrokerStatus />
-    </div>
+      <BrokerStatus streamConnected={streamConnected} />
+    </header>
   );
 }
 
@@ -66,19 +68,19 @@ function Logo() {
 }
 
 function AppShell() {
-  useSSE();
+  const streamConnected = useSSE();
 
   return (
     <>
-      <Topbar />
-      <div className="shell">
+      <Topbar streamConnected={streamConnected} />
+      <main className="shell">
         <Routes>
           <Route path="/" element={<TaskList />} />
           <Route path="/tasks/:taskName" element={<TaskDetail />} />
           <Route path="/search" element={<Search />} />
           <Route path="/invocations/:taskId" element={<InvocationDetail />} />
         </Routes>
-      </div>
+      </main>
     </>
   );
 }

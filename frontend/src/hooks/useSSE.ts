@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TaskSummary } from "../api/client";
 import {
@@ -11,15 +11,30 @@ import {
  * SSE stream — pushes only changed task summaries + stats.
  * Merges diffs into the TanStack Query cache. Full task list
  * (with sparklines) is fetched once on page load.
+ *
+ * Returns whether the stream is currently connected. Diffs sent while the
+ * stream was down are lost, so a reconnect refetches everything.
  */
-export function useSSE() {
+export function useSSE(): boolean {
   const queryClient = useQueryClient();
-  const sourceRef = useRef<EventSource | null>(null);
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let hadError = false;
+
     function connect() {
       const es = new EventSource("/api/stream");
-      sourceRef.current = es;
+      source = es;
+
+      es.onopen = () => {
+        setConnected(true);
+        if (hadError) {
+          hadError = false;
+          queryClient.invalidateQueries();
+        }
+      };
 
       es.addEventListener("task_update", (e) => {
         try {
@@ -78,11 +93,18 @@ export function useSSE() {
 
       es.onerror = () => {
         es.close();
-        setTimeout(connect, 2000);
+        setConnected(false);
+        hadError = true;
+        retryTimer = setTimeout(connect, 2000);
       };
     }
 
     connect();
-    return () => { sourceRef.current?.close(); };
+    return () => {
+      clearTimeout(retryTimer);
+      source?.close();
+    };
   }, [queryClient]);
+
+  return connected;
 }

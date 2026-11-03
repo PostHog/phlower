@@ -15,7 +15,7 @@ function fmtUptime(sec: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-export function BrokerStatus() {
+export function BrokerStatus({ streamConnected }: { streamConnected: boolean }) {
   const { data } = useQuery({
     ...statsOptions(),
     staleTime: Infinity,
@@ -23,14 +23,22 @@ export function BrokerStatus() {
 
   if (!data) return null;
 
+  // Stats only update through the stream, so a dropped stream means stale numbers
+  const healthy = streamConnected && data.broker_connected;
+  const status = !streamConnected
+    ? "Live updates disconnected, reconnecting"
+    : data.broker_connected
+      ? "Broker connected"
+      : "Broker disconnected";
+
   return (
-    <div className="heartbeat">
+    <div className={`heartbeat${streamConnected ? "" : " stale"}`} title={status}>
       <span className="heartbeat-rate">
         <span className="heartbeat-rate-val">{fmtRate(data.events_per_sec)}</span>
         <span> tasks/s</span>
       </span>
       <span className="heartbeat-latency">{fmtUptime(data.uptime_sec)}</span>
-      <span className={`heartbeat-dot${data.broker_connected ? "" : " disconnected"}`} />
+      <span className={`heartbeat-dot${healthy ? "" : " disconnected"}`} role="img" aria-label={status} />
     </div>
   );
 }

@@ -9,5 +9,5 @@ export function StatusDot({ failRate, retryCount }: Props) {
     retryCount > 0 || failRate >= 0.003 ? "warn" :
     "ok";
 
-  return <span className={`status-dot ${state}`} aria-label={state} />;
+  return <span className={`status-dot ${state}`} role="img" aria-label={`Health: ${state}`} />;
 }

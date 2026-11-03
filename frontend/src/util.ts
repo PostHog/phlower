@@ -29,10 +29,46 @@ export function fmtTs(val: number | null): string {
   return new Date(val * 1000).toLocaleTimeString("en-GB", { hour12: false });
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Local time, same zone as fmtTs and the charts. */
 export function fmtTsFull(val: number | null): string {
   if (val == null) return "\u2014";
   const d = new Date(val * 1000);
-  return d.toISOString().replace("T", " ").slice(0, 19);
+  const date = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${date} ${fmtTs(val)}`;
+}
+
+/** "ValueError: x" or "pkg.mod.ValueError: x" names ValueError. */
+function namesException(line: string, exceptionType: string | null | undefined): boolean {
+  if (!exceptionType) return false;
+  const name = line.split(":")[0].trim();
+  return name === exceptionType || name.endsWith(`.${exceptionType}`);
+}
+
+/**
+ * Best available error text for an invocation.
+ *
+ * The exception message is only kept in memory until the record is flushed
+ * to SQLite, so fall back to the traceback's "Type: message" tail.
+ */
+export function errorLine(inv: {
+  exception_type?: string | null;
+  exception_message?: string | null;
+  traceback_snippet?: string | null;
+}): string | null {
+  if (inv.exception_message) return inv.exception_message;
+  const traceback = inv.traceback_snippet?.trim();
+  if (!traceback) return inv.exception_type ?? null;
+  const lines = traceback.split("\n");
+
+  // A multiline message continues after the "Type: message" line, so start
+  // there instead of showing only the last continuation line.
+  const start = lines.findLastIndex((line) => namesException(line, inv.exception_type));
+  if (start >= 0) return lines.slice(start).join("\n").trim();
+  return lines[lines.length - 1].trim();
 }
 
 /** Common prefixes to strip from task names for readability. */

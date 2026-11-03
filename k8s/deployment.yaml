@@ -28,12 +28,6 @@ spec:
                   key: CELERY_BROKER_URL
             - name: RETENTION_HOURS
               value: "24"
-            - name: MAX_GLOBAL_INVOCATIONS
-              value: "500000"
-            - name: MAX_INVOCATIONS_PER_TASK
-              value: "50000"
-            - name: SUCCESS_SAMPLE_RATE
-              value: "0.1"
           resources:
             requests:
               memory: "256Mi"

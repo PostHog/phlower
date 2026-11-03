@@ -66,15 +66,25 @@ All via environment variables:
 | `PORT` | `8100` | HTTP listen port |
 | `RETENTION_HOURS` | `48` | In-memory invocation record retention |
 | `AGGREGATE_RETENTION_HOURS` | `168` | Hourly rollup retention (7 days) |
-| `MAX_GLOBAL_INVOCATIONS` | `100000` | Total invocation records in memory |
-| `MAX_INVOCATIONS_PER_TASK` | `10000` | Per-task invocation cap |
+| `TASK_ALLOWLIST_REGEX` | `.*` | Only track matching task names |
+| `TASK_WATCHLIST` | unset | Comma-separated task names. Parsed but not used yet. |
+| `MAX_ARGS_PREVIEW_CHARS` | `500` | Max characters of task args kept per invocation |
+| `MAX_KWARGS_PREVIEW_CHARS` | `1000` | Max characters of task kwargs kept per invocation |
 | `MAX_TRACEBACK_CHARS` | `4000` | Max stored traceback length; keeps the tail (last frames + exception line) |
 | `MAX_EXCEPTION_CHARS` | `1000` | Max stored exception message length; keeps the head |
-| `TASK_ALLOWLIST_REGEX` | `.*` | Only track matching task names |
+| `MAX_RUNTIME_BUFFER_PER_TASK` | `10000` | Parsed but not used yet |
+| `MAX_RUNTIMES_PER_BUCKET` | `500` | Parsed but not used yet |
 | `SSE_THROTTLE_SECONDS` | `0.3` | SSE push interval |
+| `SSE_INVOCATION_THROTTLE_SECONDS` | `0.6` | Push interval for invocation updates |
 | `SQLITE_PATH` | unset | Path to SQLite DB. Enables persistence when set. |
 | `SQLITE_RECOVERY_HOURS` | `48` | Fallback row-replay window (only used when no snapshots exist) |
-| `SQLITE_DETAIL_HOURS` | `8` | Hours to keep args/kwargs/traceback in SQLite before thinning |
+| `SQLITE_DETAIL_HOURS` | `60` | Parsed but not used yet. Detail rows currently live and expire with their invocation partition. |
+| `SQLITE_INVOCATION_RETENTION_HOURS` | `120` | Invocation history retention in SQLite. Whole day partitions older than this are dropped (hourly check). |
+| `SQLITE_DISK_USAGE_PCT_CAP` | `75` | Disk usage % that triggers an emergency purge. Retention is halved per pass until usage drops below the cap. |
+| `SQLITE_PURGE_CHUNK_ROWS` | `50000` | Rows deleted per step when purging an expired partition |
+| `SQLITE_VACUUM_CHUNK_PAGES` | `10000` | Free pages returned to the OS per vacuum step after a purge |
+| `SQLITE_PENDING_BUFFER_CAP` | `200000` | Max completed invocations buffered for the SQLite writer. Oldest are dropped when exceeded. |
+| `DETAIL_RATE_THRESHOLD` | `500` | Successful invocations of tasks above this many invocations/min (5-min average) skip storing args/kwargs. Failures and retries always keep their detail. `0` disables the check. |
 | `SNAPSHOT_INTERVAL_SECONDS` | `60` | How often to persist aggregate snapshots |
 
 ## SQLite persistence
@@ -83,7 +93,7 @@ Without `SQLITE_PATH`, Phlower runs entirely in memory. A restart loses all hist
 
 Setting `SQLITE_PATH` enables a WAL-mode SQLite database that serves two purposes:
 
-**Invocation history** — every completed task invocation (success, failure, retry) is written as an individual row. This powers the search/detail UI and lets you look up historical invocations that have already been evicted from memory. Rows are written in 1.5s batches. Detail fields (args, kwargs, traceback) are thinned after `SQLITE_DETAIL_HOURS` to save space. Rows older than `AGGREGATE_RETENTION_HOURS` are purged entirely. Tracebacks and exception messages are truncated when the event is ingested, before they reach memory, the SSE stream or SQLite: tracebacks keep their last `MAX_TRACEBACK_CHARS` characters (the final frames and exception line), messages keep their first `MAX_EXCEPTION_CHARS`. The full payload is not stored anywhere.
+**Invocation history** — every completed task invocation (success, failure, retry) is written as an individual row. This powers the search/detail UI and lets you look up historical invocations that have already been evicted from memory. Rows are written in 1.5s batches. Rows live in daily (UTC) partitions, and partitions older than `SQLITE_INVOCATION_RETENTION_HOURS` are dropped by an hourly purge loop, in chunks so the writer is not starved. If disk usage exceeds `SQLITE_DISK_USAGE_PCT_CAP`, the purge halves the retention window until usage is back under the cap. Args and kwargs of successful invocations are skipped for tasks running above `DETAIL_RATE_THRESHOLD` invocations/min to save space. Failures and retries always keep args, kwargs and traceback. Tracebacks and exception messages are truncated when the event is ingested, before they reach memory, the SSE stream or SQLite: tracebacks keep their last `MAX_TRACEBACK_CHARS` characters (the final frames and exception line), messages keep their first `MAX_EXCEPTION_CHARS`. The full payload is not stored anywhere.
 
 **Aggregate snapshots** — every `SNAPSHOT_INTERVAL_SECONDS`, Phlower serializes the in-memory TaskAggregate state (hourly counters, TDigest percentiles, exception/worker/queue distributions) as compressed blobs. On restart, these snapshots are restored directly instead of replaying individual rows. A short gap-replay covers events between the last snapshot and the crash/shutdown.
 
@@ -103,7 +113,7 @@ Single-pod deployment. See `k8s/` for example manifests.
 
 For persistence, attach a PVC and set `SQLITE_PATH`. The DB is self-managing — schema migrations, WAL checkpoints, and data purging all happen automatically.
 
-Resource sizing: memory usage depends on event throughput and retention settings. The in-memory store caps at `MAX_GLOBAL_INVOCATIONS` records. With default settings and moderate throughput (~50 events/sec), steady-state RSS is ~300-500 MB. Set memory limits accordingly, with headroom for the initial recovery phase.
+Resource sizing: memory usage depends on event throughput and retention settings. In-memory invocation records are bounded by `RETENTION_HOURS`. With default settings and moderate throughput (~50 events/sec), steady-state RSS is ~300-500 MB. Set memory limits accordingly, with headroom for the initial recovery phase.
 
 ## Development
 
@@ -173,7 +183,7 @@ Store (in-memory, thread-safe via threading.Lock)
 - `hourly_exceptions/workers/queues: dict[int, Counter]` — attribution counters per hour.
 - `runtime_digest: TDigest` — global runtime distribution for all-time percentiles.
 
-**`InvocationRecord`** — per-invocation state (task_id, timestamps, runtime, worker, queue, args/kwargs, exception info). Capped at `MAX_GLOBAL_INVOCATIONS` globally and `MAX_INVOCATIONS_PER_TASK` per task. Oldest records are evicted first.
+**`InvocationRecord`** — per-invocation state (task_id, timestamps, runtime, worker, queue, args/kwargs, exception info). With SQLite, completed records leave memory once they are flushed, and older ones are read back from SQLite. Without SQLite, records are evicted after `RETENTION_HOURS`, and the oldest are dropped early once more than 50,000 are held.
 
 **`WorkerRegistry`** — three-tier topology (instances -> groups -> queues) with TTL-based eviction. Updated by periodic `celery inspect` and enriched by live task events.
 
@@ -190,7 +200,7 @@ The eviction interval matters for memory — running too frequently creates allo
 
 ### SQLite tables
 
-**`invocations`** — one row per completed task invocation. Primary key is `task_id`. Indexed on `finished_at` and `(task_name, finished_at)`. Detail fields (args_preview, kwargs_preview, traceback_snippet) are NULLed after `SQLITE_DETAIL_HOURS` to save space. Rows are deleted after `AGGREGATE_RETENTION_HOURS`.
+**`invocations`** — one row per completed task invocation. Primary key is `task_id`. Indexed on `finished_at` and `(task_name, finished_at)`. Stored in daily partitions (`invocations_YYYYMMDD`, with detail fields in matching `invocation_details_YYYYMMDD` tables); a partition is dropped once it is older than `SQLITE_INVOCATION_RETENTION_HOURS`.
 
 **`aggregate_snapshots`** — one row per task name. Contains a zlib-compressed JSON blob with the full TaskAggregate state (counters, TDigest centroids as base64-encoded bytes, attribution counters). Updated every `SNAPSHOT_INTERVAL_SECONDS` for dirty tasks. Used for fast recovery on restart.
 

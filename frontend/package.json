@@ -11,30 +11,30 @@
     "typegen": "cd .. && uv run python -c \"import json; from phlower.app import create_app; print(json.dumps(create_app().openapi()))\" > /tmp/phlower-openapi.json && cd frontend && openapi-ts"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.95.2",
+    "@tanstack/react-query": "^5.105.2",
     "@tanstack/react-table": "^8.21.3",
-    "@tanstack/react-virtual": "^3.13.23",
-    "chart.js": "^4.5.1",
+    "@tanstack/react-virtual": "^3.14.25",
+    "chart.js": "^4.6.1",
     "chartjs-adapter-date-fns": "^3.0.0",
-    "date-fns": "^4.1.0",
-    "react": "^19.2.4",
+    "date-fns": "^4.4.0",
+    "react": "^19.3.1",
     "react-chartjs-2": "^5.3.1",
-    "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.2"
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@hey-api/openapi-ts": "^0.94.5",
-    "@types/node": "^24.12.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^9.39.4",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.4.0",
+    "@eslint/js": "^9.39.5",
+    "@hey-api/openapi-ts": "^0.99.0",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.57.0",
-    "vite": "^8.0.1"
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5"
   }
 }

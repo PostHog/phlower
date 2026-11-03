@@ -6,17 +6,32 @@ import { metaOptions } from "../api/generated/@tanstack/react-query.gen";
 import { StateLabel } from "../components/Badge";
 import { fmtMs, fmtTs, shortTaskName } from "../util";
 
+const ALL_STATES = ["SUCCESS", "FAILURE", "RETRY"];
+
+type SearchRequest = { params: Record<string, string>; statuses: string[] };
+
+/**
+ * The API filters by one status and limits results after that. For a partial
+ * set of states, ask once per state so newer successes can't push the
+ * failures and retries out of a mixed result.
+ */
+async function searchByStates({ params, statuses }: SearchRequest): Promise<InvocationRecord[]> {
+  if (statuses.length === 0) return api.search(params);
+  const lists = await Promise.all(statuses.map((status) => api.search({ ...params, status })));
+  return lists.flat().sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0));
+}
+
 export function Search() {
   const { data: meta } = useQuery({ ...metaOptions(), refetchInterval: 30000 });
 
   const [q, setQ] = useState("");
   const [states, setStates] = useState<Record<string, boolean>>({ SUCCESS: true, FAILURE: true, RETRY: true });
   const [queueFilter, setQueueFilter] = useState<Record<string, boolean>>({});
-  const [submitted, setSubmitted] = useState<Record<string, string>>({});
+  const [submitted, setSubmitted] = useState<SearchRequest>({ params: {}, statuses: [] });
 
   const { data: results, isFetching } = useQuery({
     queryKey: ["search", submitted],
-    queryFn: () => api.search(submitted),
+    queryFn: () => searchByStates(submitted),
     enabled: true,
   });
 
@@ -25,17 +40,14 @@ export function Search() {
     const params: Record<string, string> = {};
     if (q) params.q = q;
 
-    // The API takes a single status. With two states checked, sending only
-    // the first one dropped the other; fetch all and let the client filter.
+    // All states checked is the same as no status filter.
     const activeStates = Object.entries(states).filter(([, v]) => v).map(([k]) => k);
-    if (activeStates.length === 1) {
-      params.status = activeStates[0];
-    }
+    const statuses = activeStates.length === ALL_STATES.length ? [] : activeStates;
 
     const activeQueues = Object.entries(queueFilter).filter(([, v]) => v).map(([k]) => k);
     if (activeQueues.length === 1) params.queue = activeQueues[0];
 
-    setSubmitted(params);
+    setSubmitted({ params, statuses });
   }
 
   // Auto-search on facet change

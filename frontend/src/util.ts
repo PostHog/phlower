@@ -41,12 +41,18 @@ export function fmtTsFull(val: number | null): string {
   return `${date} ${fmtTs(val)}`;
 }
 
+/** "ValueError: x" or "pkg.mod.ValueError: x" names ValueError. */
+function namesException(line: string, exceptionType: string | null | undefined): boolean {
+  if (!exceptionType) return false;
+  const name = line.split(":")[0].trim();
+  return name === exceptionType || name.endsWith(`.${exceptionType}`);
+}
+
 /**
- * Best available one-line error for an invocation.
+ * Best available error text for an invocation.
  *
  * The exception message is only kept in memory until the record is flushed
- * to SQLite, so fall back to the traceback's last line, which carries the
- * same "Type: message" text.
+ * to SQLite, so fall back to the traceback's "Type: message" tail.
  */
 export function errorLine(inv: {
   exception_type?: string | null;
@@ -54,9 +60,15 @@ export function errorLine(inv: {
   traceback_snippet?: string | null;
 }): string | null {
   if (inv.exception_message) return inv.exception_message;
-  const lastLine = inv.traceback_snippet?.trim().split("\n").pop()?.trim();
-  if (lastLine) return lastLine;
-  return inv.exception_type ?? null;
+  const traceback = inv.traceback_snippet?.trim();
+  if (!traceback) return inv.exception_type ?? null;
+  const lines = traceback.split("\n");
+
+  // A multiline message continues after the "Type: message" line, so start
+  // there instead of showing only the last continuation line.
+  const start = lines.findLastIndex((line) => namesException(line, inv.exception_type));
+  if (start >= 0) return lines.slice(start).join("\n").trim();
+  return lines[lines.length - 1].trim();
 }
 
 /** Common prefixes to strip from task names for readability. */

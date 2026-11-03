@@ -71,7 +71,11 @@ bad:           #E5484D     heartbeat:     #2FBF71
 spark:         #1D4AFF     success:       #2FBF71
 dotOk:         #CFCABE     rowHover:      #F2EFE8
 rowSelected:   rgba(245, 78, 0, 0.07)
+successText:   #1A7F47     warnText:      #9A5B00
+badText:       #C4262B
 ```
+
+`success`, `warn` and `bad` are fills: dots, bars, borders, chart series. State-colored **text** uses the `*Text` variants, which clear 4.5:1 on `bg` at small sizes; the fills don't.
 
 ### Logo
 
@@ -81,5 +85,5 @@ Wordmark "Phlower" with colored first letters: P = blue `#1D4AFF`, h = red `#F54
 
 - TanStack Query for fetching, TanStack Virtual for large lists.
 - SSE stream (`/api/stream`) pushes task_update, sparkline_update, invocation_update events.
-- SSE merges diffs into query cache — no full refetches.
+- SSE merges diffs into query cache — no full refetches, except after a reconnect (diffs sent while the stream was down are lost). The heartbeat dot goes red and the numbers dim while the stream is down.
 - Bookmarks persisted in localStorage.

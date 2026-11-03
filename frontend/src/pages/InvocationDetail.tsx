@@ -51,7 +51,7 @@ export function InvocationDetail() {
           <span className="slash">/</span>
           <h1>{inv.task_id}</h1>
           <Badge state={inv.state} />
-          {partial && <span style={{ fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, color: "var(--warn)", letterSpacing: "0.04em" }}>PARTIAL</span>}
+          {partial && <span style={{ fontFamily: "var(--sans)", fontSize: 10, fontWeight: 600, color: "var(--warn-text)", letterSpacing: "0.04em" }}>PARTIAL</span>}
           <div style={{ flex: 1 }} />
           <span className="inv-header-meta">
             worker={inv.worker?.split("@")[1]?.split("-").slice(-1)[0] ?? inv.worker ?? "—"}
@@ -93,7 +93,7 @@ export function InvocationDetail() {
             <KvRow k="Runtime" v={fmtMs(runtimeMs)} />
             <KvRow k="Received" v={fmtTsFull(inv.received_at)} />
             <KvRow k="Started" v={fmtTsFull(inv.started_at)} />
-            <KvRow k="Finished" v={fmtTsFull(inv.finished_at)} color={inv.state === "FAILURE" ? "var(--bad)" : undefined} />
+            <KvRow k="Finished" v={fmtTsFull(inv.finished_at)} color={inv.state === "FAILURE" ? "var(--bad-text)" : undefined} />
 
             {/* Transitions */}
             {inv.transitions.length > 0 && (

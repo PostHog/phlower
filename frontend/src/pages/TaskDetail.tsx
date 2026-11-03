@@ -151,8 +151,8 @@ export function TaskDetail() {
           {/* Row 1: 6 number panes */}
           <NumPane span={2} label="Rate" value={fmtPerMin(summary.rate_per_min)} />
           <NumPane span={2} label="Total 24h" value={fmtNum(summary.total_count)} />
-          <NumPane span={2} label="Success" value={fmtNum(summary.success_count)} accent="var(--success)" />
-          <NumPane span={2} label="Fail rate" value={fmtRate(summary.failure_rate)} accent={summary.failure_rate > 0 ? "var(--bad)" : undefined} />
+          <NumPane span={2} label="Success" value={fmtNum(summary.success_count)} accent="var(--success-text)" />
+          <NumPane span={2} label="Fail rate" value={fmtRate(summary.failure_rate)} accent={summary.failure_rate > 0 ? "var(--bad-text)" : undefined} />
           <NumPane span={2} label="Active" value={String(summary.active_count)} accent={summary.active_count > 0 ? "var(--active-blue)" : undefined} />
           <NumPane span={2} label="Retries" value={fmtNum(summary.retry_count)} />
 

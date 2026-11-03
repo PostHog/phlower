@@ -26,6 +26,12 @@
 
   --spark:         #1D4AFF;
 
+  /* Text variants of the state colors. The fills above stay for dots, bars
+     and borders; at 10-12px they fall under 4.5:1 on the warm background. */
+  --success-text:  #1A7F47;
+  --warn-text:     #9A5B00;
+  --bad-text:      #C4262B;
+
   --dot-ok:        #CFCABE;
   --dot-warn:      #F5A623;
   --dot-bad:       #E5484D;
@@ -457,8 +463,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .score-zero { color: var(--fg-dim); }
 .score-low  { color: var(--fg-muted); }
-.score-mid  { color: #b8860b; background: rgba(245, 166, 35, 0.1); }
-.score-high { color: var(--bad); background: rgba(229, 72, 77, 0.1); }
+.score-mid  { color: var(--warn-text); background: rgba(245, 166, 35, 0.1); }
+.score-high { color: var(--bad-text); background: rgba(229, 72, 77, 0.1); }
 
 .task-name {
   overflow: hidden;
@@ -468,9 +474,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 .txt-dim { color: var(--fg-dim); }
 .txt-muted { color: var(--fg-muted); }
-.txt-warn { color: var(--warn); }
-.txt-bad { color: var(--bad); }
-.txt-success { color: var(--success); }
+.txt-warn { color: var(--warn-text); }
+.txt-bad { color: var(--bad-text); }
+.txt-success { color: var(--success-text); }
 .txt-active { color: var(--active-blue); }
 
 /* Status dot */
@@ -552,7 +558,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--bad);
+  color: var(--bad-text);
   flex-shrink: 0;
 }
 .failure-banner-msg {
@@ -679,7 +685,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   font-size: 10px;
 }
 .failure-group-info { flex: 1 1 0; min-width: 0; }
-.failure-group-cls { color: var(--bad); font-weight: 600; }
+.failure-group-cls { color: var(--bad-text); font-weight: 600; }
 .failure-group-msg {
   color: var(--fg-muted);
   overflow: hidden;
@@ -806,9 +812,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   letter-spacing: 0.03em;
   font-family: var(--sans);
 }
-.state-label.success { color: var(--success); }
-.state-label.failure { color: var(--bad); }
-.state-label.retry { color: var(--warn); }
+.state-label.success { color: var(--success-text); }
+.state-label.failure { color: var(--bad-text); }
+.state-label.retry { color: var(--warn-text); }
 .state-label.started { color: var(--active-blue); }
 .state-label.received, .state-label.revoked { color: var(--fg-dim); }
 
@@ -881,9 +887,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   font-weight: 700;
   letter-spacing: 0.08em;
 }
-.state-badge.success { color: var(--success); border: 1px solid var(--success); background: rgba(47, 191, 113, 0.06); }
-.state-badge.failure { color: var(--bad); border: 1px solid var(--bad); background: rgba(229, 72, 77, 0.06); }
-.state-badge.retry   { color: var(--warn); border: 1px solid var(--warn); background: rgba(245, 166, 35, 0.06); }
+.state-badge.success { color: var(--success-text); border: 1px solid var(--success); background: rgba(47, 191, 113, 0.06); }
+.state-badge.failure { color: var(--bad-text); border: 1px solid var(--bad); background: rgba(229, 72, 77, 0.06); }
+.state-badge.retry   { color: var(--warn-text); border: 1px solid var(--warn); background: rgba(245, 166, 35, 0.06); }
 
 .inv-header-meta {
   font-family: var(--mono);
@@ -1191,4 +1197,4 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 
 /* Error / retry reason in the invocation code column */
-.code-block-section .txt-bad { color: var(--bad); }
+.code-block-section .txt-bad { color: var(--bad-text); }

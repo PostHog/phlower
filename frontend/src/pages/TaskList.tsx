@@ -342,7 +342,7 @@ function FacetRow({
   waitMs?: number | null;
   workerCount?: number;
 }) {
-  const waitColor = waitMs != null && waitMs > 5000 ? "var(--bad)" : waitMs != null && waitMs > 1000 ? "var(--warn)" : "var(--fg-dim)";
+  const waitColor = waitMs != null && waitMs > 5000 ? "var(--bad-text)" : waitMs != null && waitMs > 1000 ? "var(--warn-text)" : "var(--fg-dim)";
 
   return (
     <button className={`facet-row${active ? " active" : ""}`} aria-pressed={active} onClick={onClick}>

@@ -235,27 +235,30 @@ export const searchInvocationsInfiniteQueryKey = (options?: Options<SearchInvoca
 /**
  * Search Invocations
  */
-export const searchInvocationsInfiniteOptions = (options?: Options<SearchInvocationsData>) => infiniteQueryOptions<SearchInvocationsResponse, SearchInvocationsError, InfiniteData<SearchInvocationsResponse>, QueryKey<Options<SearchInvocationsData>>, number | Pick<QueryKey<Options<SearchInvocationsData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
-// @ts-ignore
-{
-    queryFn: async ({ pageParam, queryKey, signal }) => {
-        // @ts-ignore
-        const page: Pick<QueryKey<Options<SearchInvocationsData>>[0], 'body' | 'headers' | 'path' | 'query'> = typeof pageParam === 'object' ? pageParam : {
-            query: {
-                offset: pageParam
-            }
-        };
-        const params = createInfiniteParams(queryKey, page);
-        const { data } = await searchInvocations({
-            ...options,
-            ...params,
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: searchInvocationsInfiniteQueryKey(options)
-});
+export const searchInvocationsInfiniteOptions = (options?: Options<SearchInvocationsData>) => {
+    const opts = infiniteQueryOptions<SearchInvocationsResponse, SearchInvocationsError, InfiniteData<SearchInvocationsResponse>, QueryKey<Options<SearchInvocationsData>>, number | Pick<QueryKey<Options<SearchInvocationsData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
+    // @ts-ignore
+    {
+        queryFn: async ({ pageParam, queryKey, signal }) => {
+            // @ts-ignore
+            const page: Pick<QueryKey<Options<SearchInvocationsData>>[0], 'body' | 'headers' | 'path' | 'query'> = typeof pageParam === 'object' ? pageParam : {
+                query: {
+                    offset: pageParam
+                }
+            };
+            const params = createInfiniteParams(queryKey, page);
+            const { data } = await searchInvocations({
+                ...options,
+                ...params,
+                signal,
+                throwOnError: true
+            });
+            return data;
+        },
+        queryKey: searchInvocationsInfiniteQueryKey(options)
+    });
+    return opts as Omit<typeof opts, 'initialData'>;
+};
 
 export const streamApiStreamGetQueryKey = (options?: Options<StreamApiStreamGetData>) => createQueryKey('streamApiStreamGet', options);
 

@@ -61,6 +61,22 @@ export type HealthResponse = {
      */
     sqlite_rows: number | null;
     /**
+     * Sqlite Detail Rows
+     */
+    sqlite_detail_rows: number | null;
+    /**
+     * Sqlite Oldest At
+     */
+    sqlite_oldest_at: number | null;
+    /**
+     * Disk Usage Pct
+     */
+    disk_usage_pct: number | null;
+    /**
+     * Disk Free Mb
+     */
+    disk_free_mb: number | null;
+    /**
      * Sse Clients
      */
     sse_clients: number;

@@ -17,6 +17,12 @@ from .workers import WorkerRegistry
 logger = logging.getLogger(__name__)
 
 INSPECT_INTERVAL = 60  # seconds
+# Same cadence as Flower. A worker that starts between two broadcasts
+# sends no task events until the next one reaches it.
+ENABLE_EVENTS_INTERVAL = 5  # seconds
+# Read/connect deadline for the control connection. Without it a half-open
+# broker socket blocks the control loop forever.
+CONTROL_SOCKET_TIMEOUT = 10  # seconds
 
 
 class CeleryEventConsumer:
@@ -26,31 +32,79 @@ class CeleryEventConsumer:
         self.registry = WorkerRegistry()
         self._sqlite_store = sqlite_store
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []
         self.connected: bool = False
         self.last_error: str | None = None
         self.reconnect_count: int = 0
+        self._enable_events_failing = False
 
-    # -- lifecycle --------------------------------------------------------
+    # -- control loop -----------------------------------------------------
+    #
+    # Runs on its own thread because capture() only returns after a full
+    # second without events. Under steady traffic the event loop never gets
+    # back to a timer check, so periodic work there would stall.
 
-    def start(self) -> None:
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="celery-events"
-        )
-        self._thread.start()
-        logger.info("Celery event consumer started (broker=%s)", self.config.broker_url)
+    def _make_control_app(self) -> Celery:
+        """Celery app for broadcasts and inspect, with bounded socket waits.
 
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=5)
-
-    # -- main loop --------------------------------------------------------
-
-    def _run(self) -> None:
+        Kept apart from the event receiver's app so the timeouts do not
+        touch the long-lived event subscription.
+        """
         app = Celery(broker=self.config.broker_url)
-        last_inspect = 0.0
+        app.conf.broker_transport_options = {
+            "socket_timeout": CONTROL_SOCKET_TIMEOUT,
+            "socket_connect_timeout": CONTROL_SOCKET_TIMEOUT,
+        }
+        return app
 
+    def _enable_worker_events(self, app: Celery) -> None:
+        """Ask every worker to send task events.
+
+        Workers started without -E send no events, and a restarted worker
+        starts with events off again. Broadcasting enable_events on a timer
+        keeps them on, so Phlower does not depend on worker flags or on
+        another monitor doing it.
+        """
+        try:
+            app.control.enable_events()
+        except Exception as exc:
+            # Warn once per outage, not every interval: without the broadcast,
+            # workers lacking -E stay silent while the receiver looks healthy.
+            if not self._enable_events_failing:
+                logger.warning(
+                    "enable_events broadcast failed, workers without -E send no task events (%s)",
+                    exc,
+                )
+            self._enable_events_failing = True
+            return
+        if self._enable_events_failing:
+            logger.info("enable_events broadcast recovered")
+        self._enable_events_failing = False
+
+    def _inspect_workers(self, app: Celery) -> None:
+        try:
+            self.registry.update(app)
+        except Exception:
+            logger.debug("Inspect failed", exc_info=True)
+        # Always evict stale pods/workers/queues, even when inspect failed.
+        self.registry.evict_stale()
+
+    def _control_loop(self, app: Celery) -> None:
+        last_inspect = 0.0
+        while not self._stop.is_set():
+            if self.config.enable_worker_events:
+                self._enable_worker_events(app)
+
+            now = time.time()
+            if now - last_inspect > INSPECT_INTERVAL:
+                self._inspect_workers(app)
+                last_inspect = now
+
+            self._stop.wait(ENABLE_EVENTS_INTERVAL)
+
+    # -- event loop -------------------------------------------------------
+
+    def _run(self, app: Celery) -> None:
         while not self._stop.is_set():
             try:
                 with app.connection() as conn:
@@ -83,18 +137,6 @@ class CeleryEventConsumer:
                             recv.capture(limit=None, timeout=1.0, wakeup=True)
                         except (socket.timeout, TimeoutError, Empty):
                             pass  # normal idle timeout, stay connected
-
-                        # Periodic inspect (reuse the open connection)
-                        now = time.time()
-                        if now - last_inspect > INSPECT_INTERVAL:
-                            try:
-                                self.registry.update(app)
-                            except Exception:
-                                logger.debug("Inspect failed", exc_info=True)
-                            # Always evict stale pods/workers/queues,
-                            # even when inspect itself failed.
-                            self.registry.evict_stale()
-                            last_inspect = now
             except Exception as exc:
                 self.connected = False
                 self.last_error = str(exc)
@@ -107,6 +149,28 @@ class CeleryEventConsumer:
                     self.reconnect_count, delay, exc,
                 )
                 self._stop.wait(delay)
+
+    # -- lifecycle --------------------------------------------------------
+
+    def start(self) -> None:
+        events_app = Celery(broker=self.config.broker_url)
+        control_app = self._make_control_app()
+        self._threads = [
+            threading.Thread(
+                target=self._run, args=(events_app,), daemon=True, name="celery-events"
+            ),
+            threading.Thread(
+                target=self._control_loop, args=(control_app,), daemon=True, name="celery-control"
+            ),
+        ]
+        for thread in self._threads:
+            thread.start()
+        logger.info("Celery event consumer started (broker=%s)", self.config.broker_url)
+
+    def stop(self) -> None:
+        self._stop.set()
+        for thread in self._threads:
+            thread.join(timeout=5)
 
     def seed_registry_from_sqlite(self) -> None:
         """Pre-populate the worker registry from persisted metadata."""

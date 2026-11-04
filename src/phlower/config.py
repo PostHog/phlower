@@ -9,12 +9,19 @@ def _parse_list(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+def _parse_bool(raw: str) -> bool:
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 @dataclass(frozen=True)
 class Config:
     broker_url: str = field(
         default_factory=lambda: os.environ.get(
             "CELERY_BROKER_URL", "redis://localhost:6379/0"
         )
+    )
+    enable_worker_events: bool = field(
+        default_factory=lambda: _parse_bool(os.environ.get("ENABLE_WORKER_EVENTS", "true"))
     )
     retention_hours: int = field(
         default_factory=lambda: int(os.environ.get("RETENTION_HOURS", "48"))

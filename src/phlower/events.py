@@ -20,6 +20,9 @@ INSPECT_INTERVAL = 60  # seconds
 # Same cadence as Flower. A worker that starts between two broadcasts
 # sends no task events until the next one reaches it.
 ENABLE_EVENTS_INTERVAL = 5  # seconds
+# Read/connect deadline for the control connection. Without it a half-open
+# broker socket blocks the control loop forever.
+CONTROL_SOCKET_TIMEOUT = 10  # seconds
 
 
 class CeleryEventConsumer:
@@ -39,6 +42,19 @@ class CeleryEventConsumer:
     # Runs on its own thread because capture() only returns after a full
     # second without events. Under steady traffic the event loop never gets
     # back to a timer check, so periodic work there would stall.
+
+    def _make_control_app(self) -> Celery:
+        """Celery app for broadcasts and inspect, with bounded socket waits.
+
+        Kept apart from the event receiver's app so the timeouts do not
+        touch the long-lived event subscription.
+        """
+        app = Celery(broker=self.config.broker_url)
+        app.conf.broker_transport_options = {
+            "socket_timeout": CONTROL_SOCKET_TIMEOUT,
+            "socket_connect_timeout": CONTROL_SOCKET_TIMEOUT,
+        }
+        return app
 
     def _enable_worker_events(self, app: Celery) -> None:
         """Ask every worker to send task events.
@@ -125,11 +141,14 @@ class CeleryEventConsumer:
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
-        app = Celery(broker=self.config.broker_url)
+        events_app = Celery(broker=self.config.broker_url)
+        control_app = self._make_control_app()
         self._threads = [
-            threading.Thread(target=self._run, args=(app,), daemon=True, name="celery-events"),
             threading.Thread(
-                target=self._control_loop, args=(app,), daemon=True, name="celery-control"
+                target=self._run, args=(events_app,), daemon=True, name="celery-events"
+            ),
+            threading.Thread(
+                target=self._control_loop, args=(control_app,), daemon=True, name="celery-control"
             ),
         ]
         for thread in self._threads:

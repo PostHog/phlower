@@ -54,3 +54,9 @@ def test_enable_worker_events_swallows_broker_errors():
     control = FakeControl(error=ConnectionError("broker down"))
     _make_consumer()._enable_worker_events(FakeApp(control))
     assert control.calls == 1
+
+
+def test_control_app_bounds_socket_waits():
+    options = _make_consumer()._make_control_app().conf.broker_transport_options
+    assert options["socket_timeout"] > 0
+    assert options["socket_connect_timeout"] > 0

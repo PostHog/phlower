@@ -36,6 +36,7 @@ class CeleryEventConsumer:
         self.connected: bool = False
         self.last_error: str | None = None
         self.reconnect_count: int = 0
+        self._enable_events_failing = False
 
     # -- control loop -----------------------------------------------------
     #
@@ -66,8 +67,19 @@ class CeleryEventConsumer:
         """
         try:
             app.control.enable_events()
-        except Exception:
-            logger.debug("enable_events broadcast failed", exc_info=True)
+        except Exception as exc:
+            # Warn once per outage, not every interval: without the broadcast,
+            # workers lacking -E stay silent while the receiver looks healthy.
+            if not self._enable_events_failing:
+                logger.warning(
+                    "enable_events broadcast failed, workers without -E send no task events (%s)",
+                    exc,
+                )
+            self._enable_events_failing = True
+            return
+        if self._enable_events_failing:
+            logger.info("enable_events broadcast recovered")
+        self._enable_events_failing = False
 
     def _inspect_workers(self, app: Celery) -> None:
         try:

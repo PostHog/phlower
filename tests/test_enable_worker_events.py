@@ -7,6 +7,8 @@ and that a failed broadcast does not break the consumer loop.
 
 from __future__ import annotations
 
+import logging
+
 from phlower.config import Config
 from phlower.events import CeleryEventConsumer
 from phlower.store import Store
@@ -60,3 +62,18 @@ def test_control_app_bounds_socket_waits():
     options = _make_consumer()._make_control_app().conf.broker_transport_options
     assert options["socket_timeout"] > 0
     assert options["socket_connect_timeout"] > 0
+
+
+def test_enable_worker_events_warns_once_per_outage(caplog):
+    consumer = _make_consumer()
+    failing = FakeApp(FakeControl(error=ConnectionError("broker down")))
+    with caplog.at_level(logging.INFO, logger="phlower.events"):
+        consumer._enable_worker_events(failing)
+        consumer._enable_worker_events(failing)
+        consumer._enable_worker_events(FakeApp(FakeControl()))
+        consumer._enable_worker_events(failing)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    recoveries = [r for r in caplog.records if "recovered" in r.getMessage()]
+    assert len(warnings) == 2
+    assert len(recoveries) == 1

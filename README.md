@@ -18,7 +18,7 @@ docker run -p 8100:8100 \
   ghcr.io/posthog/phlower:latest
 ```
 
-Workers must run with `-E` (events enabled).
+Phlower turns on task events on the workers by broadcasting `enable_events` every 5 seconds, the same way Flower does. Workers do not need `-E`. To leave events to the workers (`-E` or `worker_send_task_events`), set `ENABLE_WORKER_EVENTS=false`.
 
 Open `http://localhost:8100`.
 
@@ -64,6 +64,7 @@ All via environment variables:
 |----------|---------|-------------|
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker connection string |
 | `PORT` | `8100` | HTTP listen port |
+| `ENABLE_WORKER_EVENTS` | `true` | Broadcast `enable_events` to all workers every 5s so they send task events without `-E`. Set to `false` when workers enable events themselves. |
 | `RETENTION_HOURS` | `48` | In-memory invocation record retention |
 | `AGGREGATE_RETENTION_HOURS` | `168` | Hourly rollup retention (7 days) |
 | `TASK_ALLOWLIST_REGEX` | `.*` | Only track matching task names |
@@ -134,7 +135,7 @@ Vite dev server proxies API calls to `localhost:8100`.
 
 Use `scripts/fake_tasks.py` to generate test traffic:
 ```bash
-uv run celery -A scripts.fake_tasks worker -E -l info -c 2
+uv run celery -A scripts.fake_tasks worker -l info -c 2
 uv run python scripts/fake_tasks.py
 ```
 
@@ -238,6 +239,8 @@ The `/api/stream` endpoint emits three event types:
 ### Redis pub/sub at scale
 
 Phlower subscribes to task events only (task-received, task-started, task-succeeded, task-failed, task-retried), excluding worker heartbeats. This avoids the pub/sub output buffer overflow that can occur when many workers burst heartbeats simultaneously and exceed Redis/ElastiCache's `client-output-buffer-limit-pubsub`. Reconnects use exponential backoff (2s -> 60s cap).
+
+Celery workers send task events only after `-E`, `worker_send_task_events` or an `enable_events` control command, and a restarted worker starts with events off. Without one of these, the broker connection and `celery inspect` keep working but no task data arrives. Phlower therefore broadcasts `enable_events` every 5 seconds (`ENABLE_WORKER_EVENTS`). The broadcast and the minutely `celery inspect` run on a separate control thread, because `capture()` does not return while events keep arriving and would starve any timer on the event loop.
 
 ## Stack
 

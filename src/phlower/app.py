@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from kombu.utils.url import maybe_sanitize_url
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -385,7 +386,7 @@ async def lifespan(app: FastAPI):
 
     logger.info(
         "Phlower started — broker=%s retention=%dh sqlite=%s",
-        config.broker_url,
+        maybe_sanitize_url(config.broker_url),
         config.retention_hours,
         config.sqlite_path or "disabled",
     )

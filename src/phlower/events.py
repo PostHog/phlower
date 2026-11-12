@@ -9,6 +9,7 @@ import time
 from queue import Empty
 
 from celery import Celery
+from kombu.utils.url import maybe_sanitize_url
 
 from .config import Config
 from .store import Store
@@ -165,7 +166,7 @@ class CeleryEventConsumer:
         ]
         for thread in self._threads:
             thread.start()
-        logger.info("Celery event consumer started (broker=%s)", self.config.broker_url)
+        logger.info("Celery event consumer started (broker=%s)", maybe_sanitize_url(self.config.broker_url))
 
     def stop(self) -> None:
         self._stop.set()

@@ -77,3 +77,19 @@ def test_enable_worker_events_warns_once_per_outage(caplog):
     recoveries = [r for r in caplog.records if "recovered" in r.getMessage()]
     assert len(warnings) == 2
     assert len(recoveries) == 1
+
+
+def test_visibility_timeout_unset_keeps_kombu_default(monkeypatch):
+    monkeypatch.delenv("BROKER_VISIBILITY_TIMEOUT", raising=False)
+    consumer = _make_consumer()
+    assert "visibility_timeout" not in consumer._make_events_app().conf.broker_transport_options
+    assert "visibility_timeout" not in consumer._make_control_app().conf.broker_transport_options
+
+
+def test_visibility_timeout_applies_to_both_apps(monkeypatch):
+    monkeypatch.setenv("BROKER_VISIBILITY_TIMEOUT", "21600")
+    consumer = _make_consumer()
+    assert consumer._make_events_app().conf.broker_transport_options == {"visibility_timeout": 21600}
+    control_options = consumer._make_control_app().conf.broker_transport_options
+    assert control_options["visibility_timeout"] == 21600
+    assert control_options["socket_timeout"] > 0

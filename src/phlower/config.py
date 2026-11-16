@@ -14,6 +14,10 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
+def _parse_optional_int(raw: str) -> int | None:
+    return int(raw) if raw.strip() else None
+
+
 _CERT_REQS_ALIASES = {"cert_required": "required", "cert_optional": "optional", "cert_none": "none"}
 
 
@@ -43,6 +47,12 @@ class Config:
     )
     enable_worker_events: bool = field(
         default_factory=lambda: _parse_bool(os.environ.get("ENABLE_WORKER_EVENTS", "true"))
+    )
+    # Kombu's Redis transport re-queues unacknowledged tasks older than this from
+    # every consumer, Phlower included. Match the workers' value, or Phlower
+    # re-delivers long-running and scheduled tasks after kombu's 1h default.
+    broker_visibility_timeout: int | None = field(
+        default_factory=lambda: _parse_optional_int(os.environ.get("BROKER_VISIBILITY_TIMEOUT", ""))
     )
     retention_hours: int = field(
         default_factory=lambda: int(os.environ.get("RETENTION_HOURS", "48"))

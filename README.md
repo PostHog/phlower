@@ -62,7 +62,7 @@ All via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker connection string |
+| `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker connection string. A `rediss://` URL verifies the server certificate and hostname unless the URL sets `ssl_cert_reqs` or `ssl_check_hostname` itself. |
 | `PORT` | `8100` | HTTP listen port |
 | `ENABLE_WORKER_EVENTS` | `true` | Broadcast `enable_events` to all workers every 5s so they send task events without `-E`. Set to `false` when workers enable events themselves. |
 | `RETENTION_HOURS` | `48` | In-memory invocation record retention |

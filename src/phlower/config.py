@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 def _parse_list(raw: str) -> list[str]:
@@ -13,11 +14,31 @@ def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
+_CERT_REQS_ALIASES = {"cert_required": "required", "cert_optional": "optional", "cert_none": "none"}
+
+
+def with_tls_verification(url: str) -> str:
+    """Make a rediss:// broker URL verify the server certificate and hostname.
+
+    Without ssl_cert_reqs in the URL, kombu connects over TLS without checking the
+    certificate. An explicit ssl_cert_reqs or ssl_check_hostname in the URL wins.
+    """
+    parts = urlsplit(url)
+    if parts.scheme != "rediss":
+        return url
+    query = dict(parse_qsl(parts.query))
+    cert_reqs = query.get("ssl_cert_reqs", "required").lower()
+    query["ssl_cert_reqs"] = _CERT_REQS_ALIASES.get(cert_reqs, cert_reqs)
+    if query["ssl_cert_reqs"] == "required":
+        query.setdefault("ssl_check_hostname", "true")
+    return urlunsplit(parts._replace(query=urlencode(list(query.items()))))
+
+
 @dataclass(frozen=True)
 class Config:
     broker_url: str = field(
-        default_factory=lambda: os.environ.get(
-            "CELERY_BROKER_URL", "redis://localhost:6379/0"
+        default_factory=lambda: with_tls_verification(
+            os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
         )
     )
     enable_worker_events: bool = field(

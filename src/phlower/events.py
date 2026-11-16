@@ -53,10 +53,22 @@ class CeleryEventConsumer:
         """
         app = Celery(broker=self.config.broker_url)
         app.conf.broker_transport_options = {
+            **self._shared_transport_options(),
             "socket_timeout": CONTROL_SOCKET_TIMEOUT,
             "socket_connect_timeout": CONTROL_SOCKET_TIMEOUT,
         }
         return app
+
+    def _make_events_app(self) -> Celery:
+        """Celery app for the long-lived event subscription."""
+        app = Celery(broker=self.config.broker_url)
+        app.conf.broker_transport_options = self._shared_transport_options()
+        return app
+
+    def _shared_transport_options(self) -> dict[str, int]:
+        if self.config.broker_visibility_timeout is None:
+            return {}
+        return {"visibility_timeout": self.config.broker_visibility_timeout}
 
     def _enable_worker_events(self, app: Celery) -> None:
         """Ask every worker to send task events.
@@ -154,7 +166,7 @@ class CeleryEventConsumer:
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
-        events_app = Celery(broker=self.config.broker_url)
+        events_app = self._make_events_app()
         control_app = self._make_control_app()
         self._threads = [
             threading.Thread(

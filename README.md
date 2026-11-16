@@ -65,6 +65,7 @@ All via environment variables:
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Broker connection string. A `rediss://` URL verifies the server certificate and hostname unless the URL sets `ssl_cert_reqs` or `ssl_check_hostname` itself. |
 | `PORT` | `8100` | HTTP listen port |
 | `ENABLE_WORKER_EVENTS` | `true` | Broadcast `enable_events` to all workers every 5s so they send task events without `-E`. Set to `false` when workers enable events themselves. |
+| `BROKER_VISIBILITY_TIMEOUT` | kombu default (`3600`) | Seconds before kombu's Redis transport re-queues an unacknowledged task. Every consumer runs that restore, Phlower included, so set this to the workers' `visibility_timeout`. A lower value re-delivers long-running and scheduled tasks early. |
 | `RETENTION_HOURS` | `48` | In-memory invocation record retention |
 | `AGGREGATE_RETENTION_HOURS` | `168` | Hourly rollup retention (7 days) |
 | `TASK_ALLOWLIST_REGEX` | `.*` | Only track matching task names |
